@@ -36,15 +36,16 @@ private func printHelp() {
 
     USAGE
       solcito                  Show your receiver and the devices paired to it.
-      solcito pair             Add a new device. Press the small "Connect"
-                               button on the device when prompted.
+      solcito pair             Add a new device. When prompted, turn the
+                               device off and back on (or press its
+                               "Connect" button if it has one).
       solcito unpair <slot>    Remove the device in the given slot (1–6).
                                You can find slot numbers in `solcito`.
       solcito help             Show this help.
 
-    Most Logitech mice and keyboards have a small "Connect" button on the
-    underside that puts them into pairing mode. Press it within 30 seconds
-    of starting `solcito pair`.
+    Most Logitech devices enter pairing mode automatically when you switch
+    them off and back on while a receiver's pairing window is open. Some
+    older devices have a small "Connect" button on the underside instead.
     """)
 }
 
@@ -140,8 +141,8 @@ private func runPair() async {
     }
 
     let timeoutSeconds: UInt8 = 30
-    print("Opening pairing window on \(r.id.name)…")
-    print("Press the small \"Connect\" button on your device now (within \(timeoutSeconds) seconds).")
+    print("Pairing window is open on \(r.id.name) for \(timeoutSeconds) seconds.")
+    print("Turn your device off and back on now (or press its \"Connect\" button).")
     print()
 
     do {
