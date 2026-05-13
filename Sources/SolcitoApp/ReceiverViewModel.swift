@@ -46,10 +46,13 @@ final class ReceiverViewModel: Identifiable {
         defer { isLoadingInfo = false }
         do {
             let r = try ensureOpen()
-            async let info = r.info()
-            async let devices = r.pairedDevices()
-            self.info = try await info
-            self.pairedDevices = await devices
+            // IMPORTANT: serialize. info() and pairedDevices() both iterate
+            // device.inputReports, and AsyncStream yields each event to
+            // exactly one consumer — running them concurrently makes
+            // responses land at the wrong iterator and most requests time
+            // out (manifests as missing firmware / empty devices list).
+            self.info = try await r.info()
+            self.pairedDevices = await r.pairedDevices()
             self.lastError = nil
         } catch {
             self.lastError = "\(error)"

@@ -132,6 +132,13 @@ public final class Receiver: @unchecked Sendable {
     /// response. Filters unrelated input (notifications, other registers /
     /// features) and routes both HID++ 1.0 errors (subID=0x8F) and HID++ 2.0
     /// errors (subID=0xFF) back as a thrown `HIDPPError.protocolError`.
+    ///
+    /// **Concurrency:** must not be called concurrently on the same
+    /// `Receiver`. Each call iterates the underlying `device.inputReports`
+    /// AsyncStream, and that stream yields every event to a single consumer
+    /// — overlapping iterators steal each other's responses and time out.
+    /// Callers serialize their own work; a follow-up slice will move this
+    /// behind an actor that queues internally.
     public func send(_ outgoing: HIDPPReport, timeout: Duration = .seconds(2)) async throws -> HIDPPReport {
         try device.send(reportID: outgoing.kind.rawValue, outgoing.serializedPayload())
         let expectedSubID = outgoing.subID

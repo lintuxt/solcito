@@ -127,9 +127,15 @@ private struct DevicesList: View {
 
     var body: some View {
         if viewModel.pairedDevices.isEmpty {
-            Text("No paired devices responded to the ping.")
-                .foregroundStyle(.secondary)
-                .italic()
+            VStack(alignment: .leading, spacing: 4) {
+                Text("No paired devices responded to the ping.")
+                    .foregroundStyle(.secondary)
+                    .italic()
+                Text("Logitech devices sleep aggressively. If a paired device isn't showing, tap a key or move the mouse, then click Refresh.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         } else {
             ForEach(viewModel.pairedDevices, id: \.slot) { d in
                 HStack {
