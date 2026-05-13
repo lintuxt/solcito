@@ -16,9 +16,17 @@ Inspired by [Solaar](https://github.com/pwr-Solaar/Solaar), reimplemented in Swi
 ## Build & run
 
 ```sh
-swift build
+# CLI
 swift run solcito-cli list
+
+# App (proper macOS bundle with Dock icon, Cmd-Tab presence)
+./scripts/build-app.sh
+open .build/Solcito.app
 ```
+
+`swift run Solcito` also works for fast iteration, but the bare SwiftPM
+executable has no `Info.plist` and so launches as a faceless process
+(no Dock icon, missing from Cmd-Tab). Use the bundle for real testing.
 
 ## Project layout
 
