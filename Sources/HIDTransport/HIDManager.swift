@@ -20,13 +20,17 @@ public final class HIDManager: @unchecked Sendable {
         }
     }
 
-    /// Returns every HID interface whose USB vendor ID is in `vendorIDs`.
-    /// One physical receiver typically shows up as multiple handles (mouse
-    /// interface, keyboard interface, HID++ vendor interface) — callers group
-    /// by `locationID` to recover the physical device.
-    public func discover(vendorIDs: [Int]) throws -> [HIDDeviceHandle] {
+    /// Returns matching HID interfaces. By default narrows to the Logitech
+    /// **HID++ vendor-defined interface only** (usagePage 0xFF00) so macOS
+    /// doesn't think we're trying to monitor keyboard or mouse input — that
+    /// would otherwise trigger an Input Monitoring permission prompt. Pass
+    /// `usagePage: nil` to opt back into "every interface for these VIDs"
+    /// (useful for low-level diagnostics).
+    public func discover(vendorIDs: [Int], usagePage: Int? = 0xFF00) throws -> [HIDDeviceHandle] {
         let matching = vendorIDs.map { vid -> [String: Any] in
-            [kIOHIDVendorIDKey: vid]
+            var dict: [String: Any] = [kIOHIDVendorIDKey: vid]
+            if let up = usagePage { dict[kIOHIDPrimaryUsagePageKey] = up }
+            return dict
         }
         IOHIDManagerSetDeviceMatchingMultiple(manager, matching as CFArray)
 

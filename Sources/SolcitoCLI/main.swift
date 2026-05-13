@@ -71,11 +71,7 @@ private func runList() async {
         print("[\(idx)] \(r.id.name) (\(r.id.kind.displayName))")
         print("    USB:        VID=0x\(hex4(r.id.vendorID))  PID=0x\(hex4(r.id.productID))")
         print("    Location:   0x\(String(r.locationID, radix: 16))")
-        print("    Interfaces: \(r.interfaces.count)\(r.hidppInterface == nil ? " (no HID++)" : "")")
-        for h in r.interfaces.sorted(by: { ($0.info.primaryUsagePage, $0.info.primaryUsage) < ($1.info.primaryUsagePage, $1.info.primaryUsage) }) {
-            let marker = h.info.primaryUsagePage == 0xFF00 ? " ← HID++" : ""
-            print("      • usagePage=0x\(hex4(h.info.primaryUsagePage)) usage=0x\(hex4(h.info.primaryUsage))\(marker)")
-        }
+        print("    HID++:      \(r.hidppInterface == nil ? "not exposed" : "available")")
         print("    Pairable:   \(r.id.kind.supportsPairing ? "yes" : "no")")
         print()
     }
