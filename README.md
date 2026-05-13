@@ -68,8 +68,7 @@ the protocol layer is rock-solid.
 
 solcito is free and open source. If it's useful to you, consider supporting development:
 
-- 💛 [GitHub Sponsors](https://github.com/sponsors/) <!-- TODO: replace with your sponsors URL -->
-- ☕ [Buy Me a Coffee](https://buymeacoffee.com/) <!-- TODO: replace with your link -->
+- 💛 [Sponsor on GitHub](https://github.com/sponsors/lintuxt)
 
 Donations are entirely voluntary and grant no special license terms — the project remains GPL-2.0 for everyone.
 
