@@ -16,17 +16,12 @@ Inspired by [Solaar](https://github.com/pwr-Solaar/Solaar), reimplemented in Swi
 ## Build & run
 
 ```sh
-# CLI
 swift run solcito-cli list
-
-# App (proper macOS bundle with Dock icon, Cmd-Tab presence)
-./scripts/build-app.sh
-open .build/Solcito.app
+swift run solcito-cli help
 ```
 
-`swift run Solcito` also works for fast iteration, but the bare SwiftPM
-executable has no `Info.plist` and so launches as a faceless process
-(no Dock icon, missing from Cmd-Tab). Use the bundle for real testing.
+Set `SOLCITO_HID_TRACE=1` for raw HID wire bytes and
+`SOLCITO_HIDPP_TRACE=1` for protocol-level events on stderr.
 
 ## Project layout
 
@@ -40,6 +35,9 @@ Tests/
 ├── HIDTransportTests/
 └── HIDPPTests/
 ```
+
+The CLI is the current entry point; a GUI shell will come back later once
+the protocol layer is rock-solid.
 
 ## Support the project
 
