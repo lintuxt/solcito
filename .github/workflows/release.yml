@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build & release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Build
+        run: swift build -c release
+
+      - name: Package
+        id: package
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          PKG="solcito-${TAG}-macos-arm64"
+          mkdir -p "dist/${PKG}"
+          cp .build/release/solcito "dist/${PKG}/solcito"
+          cp LICENSE "dist/${PKG}/LICENSE"
+          cat > "dist/${PKG}/INSTALL" <<'EOF'
+          solcito — Logitech wireless device manager for macOS
+
+          To install manually:
+            chmod +x solcito
+            mv solcito /usr/local/bin/    # or anywhere on your PATH
+
+          Then:
+            solcito help
+
+          For the one-line installer, see:
+            https://github.com/lintuxt/solcito#install
+          EOF
+          cd dist
+          tar -czf "${PKG}.tar.gz" "${PKG}"
+          shasum -a 256 "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
+          ls -la
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "pkg=${PKG}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+          generate_release_notes: true
+          name: solcito ${{ steps.package.outputs.tag }}

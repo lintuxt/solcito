@@ -6,31 +6,47 @@ A macOS-native manager for Logitech wireless receivers (Unifying, Bolt, Lightspe
 
 Inspired by [Solaar](https://github.com/pwr-Solaar/Solaar), reimplemented in Swift on top of IOKit HID. No Python runtime, no hidapi, no Homebrew dependency.
 
-> **Status:** very early. Slice 1 (HID transport + receiver discovery) only.
+## Install
 
-## Requirements
-
-- macOS 14+
-- Swift 6.0+ (ships with Xcode 16)
-
-## Build & run
+Requires macOS 14+ on Apple Silicon.
 
 ```sh
-swift build -c release
-./.build/release/solcito help
+curl -fsSL https://raw.githubusercontent.com/lintuxt/solcito/main/install.sh | sh
 ```
 
-Common commands:
+Then:
 
 ```sh
 solcito                  # show your receiver and paired devices
 solcito pair             # add a new device
 solcito unpair <slot>    # remove a device
+solcito help             # full help
 ```
 
-Diagnostic env vars (for development): `SOLCITO_HID_TRACE=1` dumps raw
-HID wire bytes; `SOLCITO_HIDPP_TRACE=1` dumps protocol-level events.
-Both go to stderr.
+### Uninstall
+
+```sh
+rm "$(which solcito)"
+```
+
+### Build from source
+
+<details>
+<summary>Requires Xcode 16+ (Swift 6).</summary>
+
+```sh
+git clone https://github.com/lintuxt/solcito.git
+cd solcito
+swift build -c release
+./.build/release/solcito help
+```
+
+</details>
+
+### Diagnostic env vars (development)
+
+`SOLCITO_HID_TRACE=1` dumps raw HID wire bytes; `SOLCITO_HIDPP_TRACE=1`
+dumps protocol-level events. Both go to stderr.
 
 ## Project layout
 
