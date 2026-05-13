@@ -65,21 +65,28 @@ private func showStatus() async {
         return
     }
 
+    let prefixed = receivers.count > 1
     for (index, r) in receivers.enumerated() {
         if index > 0 { print() }
-        await printReceiverStatus(r)
+        await printReceiverStatus(r, prefix: prefixed ? "[\(index + 1)] " : nil)
     }
 
     print()
-    print("  solcito pair             Pair a new device")
-    print("  solcito unpair <slot>    Remove a device")
+    if prefixed {
+        print("  solcito pair             Pair a new device (you'll be asked which receiver)")
+        print("  solcito unpair <slot>    Remove a device (you'll be asked which receiver)")
+    } else {
+        print("  solcito pair             Pair a new device")
+        print("  solcito unpair <slot>    Remove a device")
+    }
 }
 
-private func printReceiverStatus(_ r: DiscoveredReceiver) async {
-    print(r.id.name)
+private func printReceiverStatus(_ r: DiscoveredReceiver, prefix: String?) async {
+    print("\(prefix ?? "")\(r.id.name)")
+    let indent = String(repeating: " ", count: (prefix?.count ?? 0))
 
     guard let hidpp = r.hidppInterface else {
-        print("  This receiver doesn't support pairing through solcito.")
+        print("\(indent)  This receiver doesn't support pairing through solcito.")
         return
     }
 
@@ -90,23 +97,23 @@ private func printReceiverStatus(_ r: DiscoveredReceiver) async {
     do {
         try receiver.open()
     } catch {
-        print("  Couldn't open the receiver.")
-        print("  Quit Logi Options+ or Logitech G Hub if they're running and try again.")
+        print("\(indent)  Couldn't open the receiver.")
+        print("\(indent)  Quit Logi Options+ or Logitech G Hub if they're running and try again.")
         return
     }
 
     let probes = await receiver.probeSlots()
     let paired = probes.filter { $0.isPaired }
     if paired.isEmpty {
-        print("  No paired devices.")
+        print("\(indent)  No paired devices.")
         return
     }
     for p in paired {
         switch p.status {
         case .respondingHIDPP:
-            print("  • Slot \(p.slot): paired")
+            print("\(indent)  • Slot \(p.slot): paired")
         case .silent:
-            print("  • Slot \(p.slot): paired (currently asleep)")
+            print("\(indent)  • Slot \(p.slot): paired (currently asleep)")
         case .empty:
             break
         }
@@ -123,12 +130,10 @@ private func runPair() async {
     } catch {
         die("Couldn't scan for receivers. (\(error))")
     }
-    guard let r = receivers.first else {
+    guard !receivers.isEmpty else {
         die("No Logitech receiver found. Plug in your USB receiver and try again.")
     }
-    if receivers.count > 1 {
-        print("Note: multiple receivers detected; pairing to \(r.id.name).")
-    }
+    let r = chooseReceiver(from: receivers, prompt: "Which receiver should I pair to?")
     guard let hidpp = r.hidppInterface else {
         die("\(r.id.name) doesn't support pairing.")
     }
@@ -205,9 +210,10 @@ private func runUnpair(slot: UInt8) async {
     } catch {
         die("Couldn't scan for receivers. (\(error))")
     }
-    guard let r = receivers.first else {
+    guard !receivers.isEmpty else {
         die("No Logitech receiver found.")
     }
+    let r = chooseReceiver(from: receivers, prompt: "Which receiver has the device in slot \(slot)?")
     guard let hidpp = r.hidppInterface else {
         die("\(r.id.name) doesn't support unpairing.")
     }
@@ -230,6 +236,35 @@ private func runUnpair(slot: UInt8) async {
 }
 
 // MARK: - helpers
+
+private func chooseReceiver(from receivers: [DiscoveredReceiver], prompt: String) -> DiscoveredReceiver {
+    if receivers.count == 1 { return receivers[0] }
+
+    print("Multiple receivers found:")
+    for (i, r) in receivers.enumerated() {
+        print("  [\(i + 1)] \(r.id.name)")
+    }
+    print()
+
+    while true {
+        write("\(prompt) [1-\(receivers.count)]: ")
+        guard let line = readLine() else {
+            stderr("")
+            die("No selection made.")
+        }
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let n = Int(trimmed), (1...receivers.count).contains(n) {
+            return receivers[n - 1]
+        }
+        print("Please enter a number between 1 and \(receivers.count).")
+    }
+}
+
+/// Writes to stdout without a newline and flushes — needed for prompts so
+/// the cursor lands after the text rather than waiting for line buffering.
+private func write(_ s: String) {
+    FileHandle.standardOutput.write(Data(s.utf8))
+}
 
 private func stderr(_ msg: String) {
     FileHandle.standardError.write(Data("\(msg)\n".utf8))
