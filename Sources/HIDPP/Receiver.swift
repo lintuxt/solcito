@@ -211,6 +211,141 @@ public final class Receiver: @unchecked Sendable {
     /// answer. Uses HID++ 2.0 Root.GetProtocolVersion (feature index 0,
     /// function 1) — works regardless of whether the receiver itself speaks
     /// HID++ 2.0, because the paired devices answer for themselves.
+    /// Fetch the best-effort details (name, kind, WPID) for a paired slot.
+    ///
+    /// Tries layered sources, in order:
+    ///   1. HID++ 1.0 receiver-stored pairing-info registers (`0xB5` sub
+    ///      `0x20+slot-1` for kind/WPID, sub `0x40+slot-1` for name).
+    ///   2. HID++ 2.0 feature `0x0005 DeviceName` directly on the paired
+    ///      device — used when (1) fails (firmware variants that reject
+    ///      `0xB5`) and the device is currently awake to answer.
+    ///
+    /// Reads are serialized to avoid having two register-read waiters
+    /// with the same (subID, address) in flight at once — the dispatcher
+    /// would only correlate one of them.
+    public func deviceDetails(slot: Int) async -> DeviceDetails {
+        let v1Name = await readSlotDeviceName(slot: slot)
+        let v1Info = await readSlotPairingInfo(slot: slot)
+        var name = v1Name
+        var kind = v1Info?.kind
+        let wpid = v1Info?.wpid
+
+        if name == nil || kind == nil {
+            let v2 = await readDeviceIdentityV2(slot: UInt8(slot))
+            name = name ?? v2.name
+            kind = kind ?? v2.kind
+        }
+        return DeviceDetails(slot: slot, name: name, kind: kind, wpid: wpid)
+    }
+
+    /// HID++ 2.0 fallback: query feature `0x0005` (`DeviceName`) directly
+    /// on the paired device. Function 0 returns the byte length, function 1
+    /// returns the name in up-to-16-byte chunks, function 2 returns the
+    /// device-type byte. Used when the receiver-stored register reads
+    /// fail (some Unifying firmwares reject `0xB5`).
+    private func readDeviceIdentityV2(slot: UInt8) async -> (name: String?, kind: PairedDeviceKind?) {
+        let fid = HIDPP20.FeatureID.deviceName.rawValue
+        guard let rootResp = try? await featureRequest(
+            deviceIndex: slot,
+            featureIndex: 0, function: 0,
+            parameters: [UInt8(fid >> 8), UInt8(fid & 0xFF)],
+            timeout: .milliseconds(400)
+        ), let nameIdx = rootResp.parameters.first, nameIdx != 0 else {
+            return (nil, nil)
+        }
+
+        // Function 0: GetCount → total name length in bytes
+        var name: String? = nil
+        if let countResp = try? await featureRequest(
+            deviceIndex: slot,
+            featureIndex: nameIdx, function: 0,
+            timeout: .milliseconds(400)
+        ) {
+            let total = Int(countResp.parameters.first ?? 0)
+            if total > 0 {
+                var bytes: [UInt8] = []
+                while bytes.count < total {
+                    let offset = UInt8(bytes.count)
+                    guard let chunk = try? await featureRequest(
+                        deviceIndex: slot,
+                        featureIndex: nameIdx, function: 1,
+                        parameters: [offset],
+                        timeout: .milliseconds(400)
+                    ) else { break }
+                    let take = min(chunk.parameters.count, total - bytes.count)
+                    guard take > 0 else { break }
+                    bytes.append(contentsOf: chunk.parameters.prefix(take))
+                }
+                if let s = String(bytes: bytes.prefix(total), encoding: .utf8) {
+                    let trimmed = s
+                        .trimmingCharacters(in: .controlCharacters)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty { name = trimmed }
+                }
+            }
+        }
+
+        // Function 2: GetDeviceType → 1 byte enum.
+        // HID++ 2.0 mapping (Solaar): 0=keyboard, 1=remote, 2=numpad,
+        // 3=mouse, 4=touchpad, 5=trackball, 6=presenter, 7=receiver,…
+        var kind: PairedDeviceKind? = nil
+        if let typeResp = try? await featureRequest(
+            deviceIndex: slot,
+            featureIndex: nameIdx, function: 2,
+            timeout: .milliseconds(400)
+        ), let raw = typeResp.parameters.first {
+            switch raw {
+            case 0: kind = .keyboard
+            case 1: kind = .remoteControl
+            case 2: kind = .numpad
+            case 3: kind = .mouse
+            case 4: kind = .touchpad
+            case 5: kind = .trackball
+            case 6: kind = .presenter
+            default: kind = nil
+            }
+        }
+
+        return (name, kind)
+    }
+
+    /// HID++ 1.0 long-register read of `0xB5` sub `(0x40|0x60) + (slot - 1)`.
+    /// Receiver-stored device name layout (from real captured bytes):
+    ///   params[0] = sub-address echo
+    ///   params[1] = name length
+    ///   params[2..2+length] = ASCII characters
+    /// Bolt receivers use the 0x60 base; everything else uses 0x40.
+    private func readSlotDeviceName(slot: Int) async -> String? {
+        let base: UInt8 = (id.kind == .bolt)
+            ? HIDPP10.PairingInfoSub.boltDeviceName
+            : HIDPP10.PairingInfoSub.deviceName
+        let sub = base &+ UInt8(slot - 1)
+        guard let report = try? await request(
+            kind: .long, subID: .getRegisterLong,
+            register: .pairingInfo,
+            parameters: [sub]
+        ) else { return nil }
+        return DeviceDetails.parseDeviceName(parameters: report.parameters, expectedSub: sub)
+    }
+
+    /// HID++ 1.0 long-register read of `0xB5` sub `(0x20|0x50) + (slot - 1)`.
+    /// Pairing-info layout (per Solaar's `device_pairing_information`):
+    ///   params[0] = sub-address echo
+    ///   params[3..4] = WPID (big-endian)
+    ///   params[7] & 0x0F = device-kind nibble
+    private func readSlotPairingInfo(slot: Int) async -> (kind: PairedDeviceKind?, wpid: UInt16?)? {
+        let base: UInt8 = (id.kind == .bolt)
+            ? HIDPP10.PairingInfoSub.boltPairingInformation
+            : HIDPP10.PairingInfoSub.pairingInformation
+        let sub = base &+ UInt8(slot - 1)
+        guard let report = try? await request(
+            kind: .long, subID: .getRegisterLong,
+            register: .pairingInfo,
+            parameters: [sub]
+        ) else { return nil }
+        return DeviceDetails.parsePairingInfo(parameters: report.parameters, expectedSub: sub)
+    }
+
     /// Probe every slot 1..`maxSlots` and report what's there. Distinguishes
     /// three outcomes: an empty slot (receiver returns `unsupported` error
     /// 0x09 immediately), a paired-but-silent slot (receiver forwards to the

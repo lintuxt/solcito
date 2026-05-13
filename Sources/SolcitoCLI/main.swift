@@ -110,14 +110,10 @@ private func printReceiverStatus(_ r: DiscoveredReceiver, prefix: String?) async
         return
     }
     for p in paired {
-        switch p.status {
-        case .respondingHIDPP:
-            print("\(indent)  • Slot \(p.slot): paired")
-        case .silent:
-            print("\(indent)  • Slot \(p.slot): paired (currently asleep)")
-        case .empty:
-            break
-        }
+        let details = await receiver.deviceDetails(slot: p.slot)
+        let label = formatDeviceLabel(details)
+        let suffix = (p.status == .silent) ? " — currently asleep" : ""
+        print("\(indent)  • Slot \(p.slot): \(label)\(suffix)")
     }
 }
 
@@ -161,12 +157,16 @@ private func runPair() async {
     eventLoop: for await event in receiver.pairingEvents {
         if ContinuousClock().now >= deadline { break }
         switch event {
-        case .deviceConnected(let slot, _, let kind):
+        case .deviceConnected(let slot, let wpid, let kind):
             // The receiver sends two CONNECT_NOTIFs (discovered + authenticated).
-            // The first one already has the right slot/kind, so just take it.
+            // The first one already has the right slot/kind/wpid; the receiver
+            // also stores the device's marketing name and we can read that
+            // back via register 0xB5 now that we know the slot.
             if paired == nil {
                 paired = (slot, kind)
-                print("✓ \(kind?.description ?? "Device") paired in slot \(slot).")
+                let receiverName = await receiver.deviceDetails(slot: slot).name
+                let details = DeviceDetails(slot: slot, name: receiverName, kind: kind, wpid: wpid)
+                print("✓ \(formatDeviceLabel(details)) paired in slot \(slot).")
                 break eventLoop
             }
         case .lockClosed(let success, let code):
