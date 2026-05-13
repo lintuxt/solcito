@@ -20,8 +20,11 @@ public enum HIDPP10 {
     public enum Register: UInt8, Sendable {
         case notifications       = 0x00
         case connectionState     = 0x02
-        case deviceConnect       = 0xB2  // write 0x02 → enter pairing mode
-        case deviceDisconnect    = 0xB3  // write slot index → unpair
+        /// "Receiver pairing" — multi-purpose, action byte selects behavior:
+        ///   0x01 → close pairing lock (cancel)
+        ///   0x02 → open pairing lock (enter pairing mode)
+        ///   0x03 → unpair device at slot N (slot byte follows)
+        case receiverPairing     = 0xB2
         case pairingInfo         = 0xB5  // long-register, sub-addressed
         case firmwareInfo        = 0xF1
     }

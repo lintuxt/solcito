@@ -59,7 +59,7 @@ public final class Receiver: @unchecked Sendable {
         _ = try await request(
             kind: .short,
             subID: .setRegisterShort,
-            register: .deviceConnect,
+            register: .receiverPairing,
             parameters: [0x02, slot, timeoutSeconds]
         )
     }
@@ -69,18 +69,19 @@ public final class Receiver: @unchecked Sendable {
         _ = try await request(
             kind: .short,
             subID: .setRegisterShort,
-            register: .deviceConnect,
+            register: .receiverPairing,
             parameters: [0x01, 0x00, 0x00]
         )
     }
 
-    /// Unpair the device at the given slot (1...maxSlots).
+    /// Unpair the device at the given slot (1...maxSlots). Solaar source:
+    /// `write_register(Registers.RECEIVER_PAIRING, 0x03, slot)`.
     public func unpair(slot: UInt8) async throws {
         _ = try await request(
             kind: .short,
             subID: .setRegisterShort,
-            register: .deviceDisconnect,
-            parameters: [slot, 0x00, 0x00]
+            register: .receiverPairing,
+            parameters: [0x03, slot, 0x00]
         )
     }
 
