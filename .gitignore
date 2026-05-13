@@ -1,0 +1,11 @@
+.DS_Store
+.build/
+.swiftpm/
+Packages/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+Package.resolved
+
+# Per-user Claude Code config — shared settings/agents/hooks are OK to commit.
+.claude/settings.local.json
