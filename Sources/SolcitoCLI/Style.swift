@@ -48,21 +48,13 @@ enum Tone {
     static func receiver(_ s: String) -> String { Style.wrap(s, Style.cyan) }
 }
 
-/// Emoji icon for a paired device's kind. Falls back to a generic plug
-/// when we couldn't figure out what it is.
+/// Plain monochrome marker for a paired device. The kind is already
+/// surfaced by the device label, so we don't differentiate per kind.
 func icon(for kind: PairedDeviceKind?) -> String {
-    switch kind {
-    case .keyboard:      return "⌨️ "
-    case .mouse:         return "🖱️ "
-    case .trackball:     return "🖲️ "
-    case .numpad:        return "🔢"
-    case .touchpad:      return "📋"
-    case .presenter:     return "🎯"
-    case .remoteControl: return "📺"
-    case nil:            return "🔌"
-    }
+    return Icons.device
 }
 
 enum Icons {
-    static let receiver = "📡"
+    static let receiver = "◆"
+    static let device = "•"
 }
