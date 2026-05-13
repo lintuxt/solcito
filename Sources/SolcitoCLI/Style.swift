@@ -55,6 +55,6 @@ func icon(for kind: PairedDeviceKind?) -> String {
 }
 
 enum Icons {
-    static let receiver = "◆"
-    static let device = "•"
+    static let receiver = Style.wrap("●", Style.cyan)
+    static let device = Style.wrap("✓", Style.brightGreen)
 }

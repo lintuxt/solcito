@@ -188,9 +188,8 @@ private func runPair() async {
                 let receiverName = await receiver.deviceDetails(slot: slot).name
                 let details = DeviceDetails(slot: slot, name: receiverName, kind: kind, wpid: wpid)
                 let label = formatDeviceLabel(details)
-                let check = Tone.ok("✓")
-                let slotTag = Tone.muted("slot \(slot)")
-                print("  \(check) \(icon(for: kind)) \(Tone.device(label))  \(slotTag)")
+                let slotTag = Tone.muted("· slot \(slot)")
+                print("  \(icon(for: kind))  \(Tone.device(label))  \(slotTag)")
                 break eventLoop
             }
         case .lockClosed(let success, let code):
