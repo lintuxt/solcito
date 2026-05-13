@@ -31,63 +31,81 @@ struct SolcitoCLI {
 // MARK: - help
 
 private func printHelp() {
-    print("""
-    solcito — manage your Logitech wireless devices on macOS
-
-    USAGE
-      solcito                  Show your receiver and the devices paired to it.
-      solcito pair             Add a new device. When prompted, turn the
-                               device off and back on (or press its
-                               "Connect" button if it has one).
-      solcito unpair <slot>    Remove the device in the given slot (1–6).
-                               You can find slot numbers in `solcito`.
-      solcito help             Show this help.
-
-    Most Logitech devices enter pairing mode automatically when you switch
-    them off and back on while a receiver's pairing window is open. Some
-    older devices have a small "Connect" button on the underside instead.
-    """)
+    print()
+    print("  \(Tone.title("solcito"))  \(Tone.subtle("· Logitech wireless device manager for macOS"))")
+    print()
+    print("  \(Tone.muted("USAGE"))")
+    let rows: [(String, String)] = [
+        ("solcito",                "Show your receiver and the devices paired to it."),
+        ("solcito pair",           "Add a new device. When prompted, turn the device off and on"),
+        ("",                       "(or press its \"Connect\" button if it has one)."),
+        ("solcito unpair <slot>",  "Remove the device in the given slot (1–6)."),
+        ("solcito help",           "Show this help."),
+    ]
+    for (cmd, desc) in rows {
+        let col = cmd.padding(toLength: 24, withPad: " ", startingAt: 0)
+        print("    \(Tone.device(col))\(Tone.subtle(desc))")
+    }
+    print()
+    print("  \(Tone.muted("TIP"))")
+    print("    \(Tone.subtle("Most Logitech devices enter pairing mode when you switch them off"))")
+    print("    \(Tone.subtle("and back on while a receiver's pairing window is open."))")
+    print()
 }
 
 // MARK: - default: status
 
 private func showStatus() async {
+    printBanner()
+
     let manager = HIDManager()
     let receivers: [DiscoveredReceiver]
     do {
         receivers = try ReceiverDiscovery.find(using: manager)
     } catch {
-        die("Couldn't scan for receivers. (\(error))")
+        die(Tone.error("Couldn't scan for receivers. (\(error))"))
     }
 
     guard !receivers.isEmpty else {
-        print("No Logitech receiver found.")
-        print("Plug in your Logitech USB receiver, then run `solcito` again.")
+        print("  \(Tone.warn("No Logitech receiver found."))")
+        print("  \(Tone.subtle("Plug in your Logitech USB receiver, then run `solcito` again."))")
+        print()
         return
     }
 
     let prefixed = receivers.count > 1
     for (index, r) in receivers.enumerated() {
         if index > 0 { print() }
-        await printReceiverStatus(r, prefix: prefixed ? "[\(index + 1)] " : nil)
+        await printReceiverStatus(r, label: prefixed ? "[\(index + 1)]" : nil)
     }
 
-    print()
-    if prefixed {
-        print("  solcito pair             Pair a new device (you'll be asked which receiver)")
-        print("  solcito unpair <slot>    Remove a device (you'll be asked which receiver)")
-    } else {
-        print("  solcito pair             Pair a new device")
-        print("  solcito unpair <slot>    Remove a device")
-    }
+    printCommandsFooter(multipleReceivers: prefixed)
 }
 
-private func printReceiverStatus(_ r: DiscoveredReceiver, prefix: String?) async {
-    print("\(prefix ?? "")\(r.id.name)")
-    let indent = String(repeating: " ", count: (prefix?.count ?? 0))
+private func printBanner() {
+    print()
+    print("  \(Tone.title("solcito"))  \(Tone.subtle("· Logitech wireless device manager"))")
+    print()
+}
+
+private func printCommandsFooter(multipleReceivers: Bool) {
+    print()
+    print("  \(Tone.muted("Commands"))")
+    let pairCol = "solcito pair".padding(toLength: 24, withPad: " ", startingAt: 0)
+    let unpairCol = "solcito unpair <slot>".padding(toLength: 24, withPad: " ", startingAt: 0)
+    let pairDesc = multipleReceivers ? "Pair a new device (you'll be asked which receiver)" : "Pair a new device"
+    let unpairDesc = multipleReceivers ? "Remove a device (you'll be asked which receiver)" : "Remove a device"
+    print("    \(pairCol)\(Tone.subtle(pairDesc))")
+    print("    \(unpairCol)\(Tone.subtle(unpairDesc))")
+    print()
+}
+
+private func printReceiverStatus(_ r: DiscoveredReceiver, label: String?) async {
+    let labelPart = label.map { " \(Tone.muted($0))" } ?? ""
+    print("  \(Icons.receiver)  \(Tone.receiver(r.id.name))\(labelPart)")
 
     guard let hidpp = r.hidppInterface else {
-        print("\(indent)  This receiver doesn't support pairing through solcito.")
+        print("      \(Tone.subtle("This receiver doesn't support pairing through solcito."))")
         return
     }
 
@@ -98,22 +116,23 @@ private func printReceiverStatus(_ r: DiscoveredReceiver, prefix: String?) async
     do {
         try receiver.open()
     } catch {
-        print("\(indent)  Couldn't open the receiver.")
-        print("\(indent)  Quit Logi Options+ or Logitech G Hub if they're running and try again.")
+        print("      \(Tone.warn("Couldn't open the receiver."))")
+        print("      \(Tone.subtle("Quit Logi Options+ or Logitech G Hub if running and try again."))")
         return
     }
 
     let probes = await receiver.probeSlots()
     let paired = probes.filter { $0.isPaired }
     if paired.isEmpty {
-        print("\(indent)  No paired devices.")
+        print("      \(Tone.subtle("No paired devices"))")
         return
     }
     for p in paired {
         let details = await receiver.deviceDetails(slot: p.slot)
         let label = formatDeviceLabel(details)
-        let suffix = (p.status == .silent) ? " — currently asleep" : ""
-        print("\(indent)  • Slot \(p.slot): \(label)\(suffix)")
+        let slotTag = Tone.muted("· slot \(p.slot)")
+        let suffix = (p.status == .silent) ? "  \(Tone.warn("(asleep)"))" : ""
+        print("      \(icon(for: details.kind)) \(Tone.device(label))  \(slotTag)\(suffix)")
     }
 }
 
@@ -137,8 +156,10 @@ private func runPair() async {
     }
 
     let timeoutSeconds: UInt8 = 30
-    print("Pairing window is open on \(r.id.name) for \(timeoutSeconds) seconds.")
-    print("Turn your device off and back on now (or press its \"Connect\" button).")
+    print()
+    print("  \(Icons.receiver)  \(Tone.receiver(r.id.name))")
+    print("  \(Tone.subtle("Pairing window open for \(timeoutSeconds) seconds…"))")
+    print("  \(Tone.heading("Turn your device off and back on now")) \(Tone.subtle("(or press its \"Connect\" button)"))")
     print()
 
     do {
@@ -166,7 +187,10 @@ private func runPair() async {
                 paired = (slot, kind)
                 let receiverName = await receiver.deviceDetails(slot: slot).name
                 let details = DeviceDetails(slot: slot, name: receiverName, kind: kind, wpid: wpid)
-                print("✓ \(formatDeviceLabel(details)) paired in slot \(slot).")
+                let label = formatDeviceLabel(details)
+                let check = Tone.ok("✓")
+                let slotTag = Tone.muted("slot \(slot)")
+                print("  \(check) \(icon(for: kind)) \(Tone.device(label))  \(slotTag)")
                 break eventLoop
             }
         case .lockClosed(let success, let code):
@@ -182,12 +206,13 @@ private func runPair() async {
 
     if paired == nil {
         if let code = pairError {
-            print("No device paired (error 0x\(String(format: "%02X", code))).")
+            print("  \(Tone.error("✗ No device paired"))  \(Tone.subtle("(error 0x\(String(format: "%02X", code)))"))")
         } else {
-            print("No device paired in time. Make sure the device is in pairing")
-            print("mode and try `solcito pair` again.")
+            print("  \(Tone.warn("⌛ No device paired in time."))")
+            print("  \(Tone.subtle("Make sure the device is in pairing mode and try `solcito pair` again."))")
         }
     }
+    print()
 }
 
 // MARK: - unpair
@@ -208,9 +233,11 @@ private func runUnpair(slot: UInt8) async {
 
     do {
         try await receiver.unpair(slot: slot)
-        print("Removed the device in slot \(slot).")
+        print()
+        print("  \(Tone.ok("✓")) Removed the device in \(Tone.device("slot \(slot)")).")
+        print()
     } catch {
-        die("Couldn't unpair slot \(slot). (\(error))")
+        die(Tone.error("Couldn't unpair slot \(slot). (\(error))"))
     }
 }
 
@@ -249,9 +276,12 @@ private func chooseReceiver(from receivers: [DiscoveredReceiver], prompt: String
     if opened.count == 1 {
         pickIndex = 0
     } else {
-        print("Multiple receivers found:")
+        print()
+        print("  \(Tone.heading("Multiple receivers found:"))")
         for (i, item) in opened.enumerated() {
-            print("  [\(i + 1)] \(item.meta.id.name) \(summarize(count: item.count))")
+            let tag = Tone.muted("[\(i + 1)]")
+            let info = Tone.subtle(summarize(count: item.count))
+            print("    \(tag) \(Icons.receiver)  \(Tone.receiver(item.meta.id.name))  \(info)")
         }
         print()
         pickIndex = readChoice(prompt: prompt, range: 1...opened.count, opened: opened) - 1
