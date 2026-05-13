@@ -7,7 +7,7 @@ let package = Package(
     products: [
         .library(name: "HIDTransport", targets: ["HIDTransport"]),
         .library(name: "HIDPP", targets: ["HIDPP"]),
-        .executable(name: "solcito-cli", targets: ["SolcitoCLI"]),
+        .executable(name: "solcito", targets: ["SolcitoCLI"]),
     ],
     targets: [
         .target(name: "HIDTransport"),

@@ -16,12 +16,21 @@ Inspired by [Solaar](https://github.com/pwr-Solaar/Solaar), reimplemented in Swi
 ## Build & run
 
 ```sh
-swift run solcito-cli list
-swift run solcito-cli help
+swift build -c release
+./.build/release/solcito help
 ```
 
-Set `SOLCITO_HID_TRACE=1` for raw HID wire bytes and
-`SOLCITO_HIDPP_TRACE=1` for protocol-level events on stderr.
+Common commands:
+
+```sh
+solcito                  # show your receiver and paired devices
+solcito pair             # add a new device
+solcito unpair <slot>    # remove a device
+```
+
+Diagnostic env vars (for development): `SOLCITO_HID_TRACE=1` dumps raw
+HID wire bytes; `SOLCITO_HIDPP_TRACE=1` dumps protocol-level events.
+Both go to stderr.
 
 ## Project layout
 

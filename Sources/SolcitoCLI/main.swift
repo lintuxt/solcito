@@ -7,113 +7,81 @@ struct SolcitoCLI {
     static func main() async {
         let args = Array(CommandLine.arguments.dropFirst())
         switch args.first {
-        case nil, "list":
-            await runList()
-        case "info":
-            await runInfo(index: args.dropFirst().first.flatMap(Int.init))
+        case nil:
+            await showStatus()
         case "pair":
-            let rest = Array(args.dropFirst())
-            await runPair(
-                receiverIndex: rest.first.flatMap(Int.init),
-                timeout: rest.dropFirst().first.flatMap(UInt8.init) ?? 30
-            )
+            await runPair()
         case "unpair":
-            let rest = Array(args.dropFirst())
-            guard let slot = rest.first.flatMap(UInt8.init), slot > 0 else {
-                FileHandle.standardError.write(Data("usage: solcito-cli unpair <slot 1..6> [receiver]\n".utf8))
+            guard let slot = args.dropFirst().first.flatMap(UInt8.init), (1...6).contains(slot) else {
+                stderr("Usage: solcito unpair <slot>")
+                stderr("       Slot is the number shown next to the device in `solcito`.")
                 exit(2)
             }
-            await runUnpair(slot: slot, receiverIndex: rest.dropFirst().first.flatMap(Int.init))
-        case "devices":
-            await runDevices(receiverIndex: args.dropFirst().first.flatMap(Int.init))
-        case "wedge":
-            // Reproduces what the SwiftUI app does on view-appear: info()
-            // then pairedDevices() then beginPairing. The app's pair fails
-            // after this sequence; CLI's solo pair works. This command lets
-            // us see — with SOLCITO_HIDPP_TRACE=1 — exactly where the wedge
-            // shows up in the trace.
-            let rest = Array(args.dropFirst())
-            await runWedge(
-                receiverIndex: rest.first.flatMap(Int.init),
-                pairTimeout: rest.dropFirst().first.flatMap(UInt8.init) ?? 5
-            )
-        case "--help", "-h", "help":
-            printUsage()
+            await runUnpair(slot: slot)
+        case "help", "-h", "--help":
+            printHelp()
         case let other?:
-            FileHandle.standardError.write(Data("unknown command: \(other)\n".utf8))
+            stderr("Unknown command: \(other)")
+            stderr("Run `solcito help` to see available commands.")
             exit(2)
         }
     }
 }
 
-private func printUsage() {
-    print("""
-    solcito-cli — manage Logitech receivers on macOS
+// MARK: - help
 
-    USAGE:
-      solcito-cli [list]                List connected Logitech receivers (default)
-      solcito-cli info [N]              Show HID++ info for receiver N (default: 0)
-      solcito-cli pair [N] [timeout]    Enter pairing mode on receiver N (default: 0)
-                                        for `timeout` seconds (default: 30).
-                                        Press the pair button on your device.
-      solcito-cli unpair <slot> [N]     Unpair the device at slot (1..6) on receiver N.
-      solcito-cli devices [N]           List paired devices on receiver N (HID++ 2.0 ping).
-      solcito-cli wedge [N] [timeout]   Diagnostic: run info() + pairedDevices() then
-                                        attempt beginPairing in one process. Used with
-                                        SOLCITO_HIDPP_TRACE=1 to reproduce app behavior.
-      solcito-cli help                  Show this help
+private func printHelp() {
+    print("""
+    solcito — manage your Logitech wireless devices on macOS
+
+    USAGE
+      solcito                  Show your receiver and the devices paired to it.
+      solcito pair             Add a new device. Press the small "Connect"
+                               button on the device when prompted.
+      solcito unpair <slot>    Remove the device in the given slot (1–6).
+                               You can find slot numbers in `solcito`.
+      solcito help             Show this help.
+
+    Most Logitech mice and keyboards have a small "Connect" button on the
+    underside that puts them into pairing mode. Press it within 30 seconds
+    of starting `solcito pair`.
     """)
 }
 
-// MARK: - list
+// MARK: - default: status
 
-private func runList() async {
+private func showStatus() async {
+    let manager = HIDManager()
     let receivers: [DiscoveredReceiver]
     do {
-        receivers = try ReceiverDiscovery.find(using: HIDManager())
+        receivers = try ReceiverDiscovery.find(using: manager)
     } catch {
-        die("discovery failed: \(error)")
+        die("Couldn't scan for receivers. (\(error))")
     }
 
-    if receivers.isEmpty {
-        print("No Logitech receivers found.")
+    guard !receivers.isEmpty else {
+        print("No Logitech receiver found.")
+        print("Plug in your Logitech USB receiver, then run `solcito` again.")
         return
     }
 
-    print("Found \(receivers.count) receiver\(receivers.count == 1 ? "" : "s"):\n")
-    for (idx, r) in receivers.enumerated() {
-        print("[\(idx)] \(r.id.name) (\(r.id.kind.displayName))")
-        print("    USB:        VID=0x\(hex4(r.id.vendorID))  PID=0x\(hex4(r.id.productID))")
-        print("    Location:   0x\(String(r.locationID, radix: 16))")
-        print("    HID++:      \(r.hidppInterface == nil ? "not exposed" : "available")")
-        print("    Pairable:   \(r.id.kind.supportsPairing ? "yes" : "no")")
-        print()
+    for (index, r) in receivers.enumerated() {
+        if index > 0 { print() }
+        await printReceiverStatus(r)
     }
+
+    print()
+    print("  solcito pair             Pair a new device")
+    print("  solcito unpair <slot>    Remove a device")
 }
 
-// MARK: - info
+private func printReceiverStatus(_ r: DiscoveredReceiver) async {
+    print(r.id.name)
 
-private func runInfo(index: Int?) async {
-    let manager = HIDManager()
-    let receivers: [DiscoveredReceiver]
-    do {
-        receivers = try ReceiverDiscovery.find(using: manager)
-    } catch {
-        die("discovery failed: \(error)")
-    }
-    guard !receivers.isEmpty else { die("No Logitech receivers found.") }
-    let chosenIndex = index ?? 0
-    guard chosenIndex >= 0, chosenIndex < receivers.count else {
-        die("receiver index \(chosenIndex) out of range (0..<\(receivers.count))")
-    }
-    let r = receivers[chosenIndex]
     guard let hidpp = r.hidppInterface else {
-        die("receiver [\(chosenIndex)] does not expose a HID++ interface")
+        print("  This receiver doesn't support pairing through solcito.")
+        return
     }
-
-    print("Receiver [\(chosenIndex)]: \(r.id.name) (\(r.id.kind.displayName))")
-    print("  Location: 0x\(String(r.locationID, radix: 16))")
-    print("  USB:      VID=0x\(hex4(r.id.vendorID))  PID=0x\(hex4(r.id.productID))")
 
     let device = HIDDevice(handle: hidpp)
     let receiver = Receiver(id: r.id, hidppDevice: device)
@@ -122,174 +90,152 @@ private func runInfo(index: Int?) async {
     do {
         try receiver.open()
     } catch {
-        die("could not open HID++ interface: \(error)\n  (try running with sudo, or check that no other process — including Logitech G HUB / Solaar — has the receiver open)")
+        print("  Couldn't open the receiver.")
+        print("  Quit Logi Options+ or Logitech G Hub if they're running and try again.")
+        return
     }
 
-    do {
-        let info = try await receiver.info()
-        print("  Firmware: \(info.firmwareVersion ?? "unknown")")
-        print("  Serial:   \(info.serialNumber ?? "unknown")")
-        print("  Max devices:        \(info.maxPairedDevices.map(String.init) ?? "unknown")")
-        print("  Connected devices:  \(info.connectedDeviceCount.map(String.init) ?? "unknown")")
-    } catch {
-        die("info read failed: \(error)")
+    let probes = await receiver.probeSlots()
+    let paired = probes.filter { $0.isPaired }
+    if paired.isEmpty {
+        print("  No paired devices.")
+        return
+    }
+    for p in paired {
+        switch p.status {
+        case .respondingHIDPP:
+            print("  • Slot \(p.slot): paired")
+        case .silent:
+            print("  • Slot \(p.slot): paired (currently asleep)")
+        case .empty:
+            break
+        }
     }
 }
 
-// MARK: - pair / unpair
+// MARK: - pair
 
-private func openHIDPP(receiverIndex: Int?) async -> (DiscoveredReceiver, Receiver) {
+private func runPair() async {
     let manager = HIDManager()
-    _ = manager  // retain for handle lifetime
     let receivers: [DiscoveredReceiver]
     do {
         receivers = try ReceiverDiscovery.find(using: manager)
     } catch {
-        die("discovery failed: \(error)")
+        die("Couldn't scan for receivers. (\(error))")
     }
-    guard !receivers.isEmpty else { die("No Logitech receivers found.") }
-    let idx = receiverIndex ?? 0
-    guard idx >= 0, idx < receivers.count else {
-        die("receiver index \(idx) out of range (0..<\(receivers.count))")
+    guard let r = receivers.first else {
+        die("No Logitech receiver found. Plug in your USB receiver and try again.")
     }
-    let r = receivers[idx]
+    if receivers.count > 1 {
+        print("Note: multiple receivers detected; pairing to \(r.id.name).")
+    }
     guard let hidpp = r.hidppInterface else {
-        die("receiver [\(idx)] does not expose a HID++ interface")
+        die("\(r.id.name) doesn't support pairing.")
     }
+    guard r.id.kind.supportsPairing else {
+        die("\(r.id.name) can't pair new devices (this receiver type is fixed).")
+    }
+
     let device = HIDDevice(handle: hidpp)
     let receiver = Receiver(id: r.id, hidppDevice: device)
+    defer { receiver.close() }
     do {
         try receiver.open()
     } catch {
-        die("could not open HID++ interface: \(error)\n  (try quitting Logi Options+ or G HUB)")
+        die("Couldn't open the receiver. Quit Logi Options+ or Logitech G Hub and try again.")
     }
-    return (r, receiver)
-}
 
-private func runPair(receiverIndex: Int?, timeout: UInt8) async {
-    let (r, receiver) = await openHIDPP(receiverIndex: receiverIndex)
-    defer { receiver.close() }
-
-    print("Receiver: \(r.id.name) (\(r.id.kind.displayName))")
-    print("Opening pairing window for \(timeout) seconds…")
-    print("→ Press the pair button on the Logitech device you want to pair.\n")
+    let timeoutSeconds: UInt8 = 30
+    print("Opening pairing window on \(r.id.name)…")
+    print("Press the small \"Connect\" button on your device now (within \(timeoutSeconds) seconds).")
+    print()
 
     do {
-        try await receiver.beginPairing(timeoutSeconds: timeout)
+        try await receiver.beginPairing(timeoutSeconds: timeoutSeconds)
     } catch {
-        die("could not start pairing: \(error)")
+        die("Couldn't open the pairing window. (\(error))")
     }
 
-    let deadline = ContinuousClock().now.advanced(by: .seconds(Int(timeout) + 2))
-    let watcher = Task {
-        for await event in receiver.pairingEvents {
-            switch event {
-            case .lockOpened:
-                print("  → lock opened (receiver discoverable)")
-            case .lockClosed(let success, let code):
-                if success {
-                    print("  → lock closed")
-                } else {
-                    print("  → lock closed with error code 0x\(String(format: "%02X", code ?? 0))")
-                }
-            case .deviceConnected(let slot, let wpid, let kind):
-                let wpidStr = wpid.map { String(format: "0x%04X", $0) } ?? "?"
-                let kindStr = kind.map(\.description) ?? "Unknown"
-                print("  ✓ slot \(slot): \(kindStr) connected (WPID \(wpidStr))")
-            case .deviceDisconnected(let slot):
-                print("  ✗ slot \(slot): disconnected")
-            case .raw(let r):
-                let hex = r.parameters.map { String(format: "%02X", $0) }.joined(separator: " ")
-                print("  · raw  dev=\(String(format: "0x%02X", r.deviceIndex))  " +
-                      "sub=\(String(format: "0x%02X", r.subID))  " +
-                      "addr=\(String(format: "0x%02X", r.address))  [\(hex)]")
+    // Listen for events until we see a device get paired or the window times
+    // out. We early-exit on the first deviceConnected event so the user
+    // isn't stuck waiting for the full window.
+    let deadline = ContinuousClock().now.advanced(by: .seconds(Int(timeoutSeconds) + 2))
+    var paired: (slot: Int, kind: PairedDeviceKind?)? = nil
+    var pairError: UInt8? = nil
+
+    eventLoop: for await event in receiver.pairingEvents {
+        if ContinuousClock().now >= deadline { break }
+        switch event {
+        case .deviceConnected(let slot, _, let kind):
+            // The receiver sends two CONNECT_NOTIFs (discovered + authenticated).
+            // The first one already has the right slot/kind, so just take it.
+            if paired == nil {
+                paired = (slot, kind)
+                print("✓ \(kind?.description ?? "Device") paired in slot \(slot).")
+                break eventLoop
             }
+        case .lockClosed(let success, let code):
+            if !success { pairError = code }
+            break eventLoop
+        case .lockOpened, .deviceDisconnected, .raw:
+            continue
         }
     }
 
-    while ContinuousClock().now < deadline {
-        try? await Task.sleep(for: .milliseconds(250))
-    }
-    watcher.cancel()
-
-    // Best-effort: close the pairing lock if it's still open.
+    // Make sure the lock is closed (no-op if it already closed itself).
     try? await receiver.cancelPairing()
-    print("\nPairing window closed.")
-}
 
-private func runDevices(receiverIndex: Int?) async {
-    let (r, receiver) = await openHIDPP(receiverIndex: receiverIndex)
-    defer { receiver.close() }
-
-    print("Receiver: \(r.id.name) (\(r.id.kind.displayName))")
-    print("Pinging slots 1..6 (HID++ 2.0 Root.GetProtocolVersion)…\n")
-
-    let devices = await receiver.pairedDevices()
-    if devices.isEmpty {
-        print("No paired devices responded.")
-        print("(All slots either empty, asleep, or this receiver doesn't relay HID++ 2.0 to its devices.)")
-        return
-    }
-    for d in devices {
-        print("  Slot \(d.slot): HID++ \(d.hidppVersion)")
+    if paired == nil {
+        if let code = pairError {
+            print("No device paired (error 0x\(String(format: "%02X", code))).")
+        } else {
+            print("No device paired in time. Make sure the device is in pairing")
+            print("mode and try `solcito pair` again.")
+        }
     }
 }
 
-private func runWedge(receiverIndex: Int?, pairTimeout: UInt8) async {
-    let (r, receiver) = await openHIDPP(receiverIndex: receiverIndex)
-    defer { receiver.close() }
+// MARK: - unpair
 
-    print("Receiver: \(r.id.name) (\(r.id.kind.displayName))")
-    print()
-    print("step 1/3: info()")
+private func runUnpair(slot: UInt8) async {
+    let manager = HIDManager()
+    let receivers: [DiscoveredReceiver]
     do {
-        let info = try await receiver.info()
-        print("  firmware:  \(info.firmwareVersion ?? "unknown")")
-        print("  serial:    \(info.serialNumber ?? "unknown")")
-        print("  max slots: \(info.maxPairedDevices.map(String.init) ?? "unknown")")
-        print("  connected: \(info.connectedDeviceCount.map(String.init) ?? "unknown")")
+        receivers = try ReceiverDiscovery.find(using: manager)
     } catch {
-        print("  ✗ \(error)")
+        die("Couldn't scan for receivers. (\(error))")
     }
-    print()
-    print("step 2/3: pairedDevices() (slot ping sweep)")
-    let devices = await receiver.pairedDevices()
-    if devices.isEmpty {
-        print("  no responses")
-    } else {
-        for d in devices { print("  slot \(d.slot): HID++ \(d.hidppVersion)") }
+    guard let r = receivers.first else {
+        die("No Logitech receiver found.")
     }
-    print()
-    print("step 3/3: beginPairing(timeout: \(pairTimeout)s)")
-    do {
-        try await receiver.beginPairing(timeoutSeconds: pairTimeout)
-        print("  ✓ pairing window open. Letting it run \(pairTimeout)s…")
-        try? await Task.sleep(for: .seconds(Int(pairTimeout)))
-        try? await receiver.cancelPairing()
-        print("  pairing window closed.")
-    } catch {
-        print("  ✗ \(error)")
+    guard let hidpp = r.hidppInterface else {
+        die("\(r.id.name) doesn't support unpairing.")
     }
-}
 
-private func runUnpair(slot: UInt8, receiverIndex: Int?) async {
-    let (r, receiver) = await openHIDPP(receiverIndex: receiverIndex)
+    let device = HIDDevice(handle: hidpp)
+    let receiver = Receiver(id: r.id, hidppDevice: device)
     defer { receiver.close() }
+    do {
+        try receiver.open()
+    } catch {
+        die("Couldn't open the receiver. Quit Logi Options+ or Logitech G Hub and try again.")
+    }
 
-    print("Receiver: \(r.id.name) — unpairing slot \(slot)…")
     do {
         try await receiver.unpair(slot: slot)
-        print("Done.")
+        print("Removed the device in slot \(slot).")
     } catch {
-        die("unpair failed: \(error)")
+        die("Couldn't unpair slot \(slot). (\(error))")
     }
 }
 
 // MARK: - helpers
 
-private func hex4(_ n: Int) -> String { String(format: "%04X", n) }
+private func stderr(_ msg: String) {
+    FileHandle.standardError.write(Data("\(msg)\n".utf8))
+}
 
 private func die(_ msg: String) -> Never {
-    FileHandle.standardError.write(Data("error: \(msg)\n".utf8))
+    stderr(msg)
     exit(1)
 }

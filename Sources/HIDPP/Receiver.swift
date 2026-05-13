@@ -211,43 +211,41 @@ public final class Receiver: @unchecked Sendable {
     /// answer. Uses HID++ 2.0 Root.GetProtocolVersion (feature index 0,
     /// function 1) — works regardless of whether the receiver itself speaks
     /// HID++ 2.0, because the paired devices answer for themselves.
-    public func pairedDevices(maxSlots: Int = 6, perSlotTimeout: Duration = .milliseconds(400)) async -> [PairedDeviceSummary] {
-        HIDPPTrace.log("┌─ pairedDevices(maxSlots: \(maxSlots), perSlotTimeout: \(perSlotTimeout))")
-        var results: [PairedDeviceSummary] = []
+    /// Probe every slot 1..`maxSlots` and report what's there. Distinguishes
+    /// three outcomes: an empty slot (receiver returns `unsupported` error
+    /// 0x09 immediately), a paired-but-silent slot (receiver forwards to the
+    /// device, device doesn't answer in time — usually asleep), or a
+    /// paired-and-responding slot (HID++ 2.0 ping echoes back).
+    public func probeSlots(maxSlots: Int = 6, perSlotTimeout: Duration = .milliseconds(400)) async -> [SlotProbe] {
+        HIDPPTrace.log("┌─ probeSlots(maxSlots: \(maxSlots))")
+        var results: [SlotProbe] = []
         for slot in 1...UInt8(maxSlots) {
-            if let summary = await pingSlot(slot, timeout: perSlotTimeout) {
-                results.append(summary)
-            }
+            results.append(SlotProbe(slot: Int(slot), status: await probeStatus(of: slot, timeout: perSlotTimeout)))
         }
-        HIDPPTrace.log("└─ pairedDevices found \(results.count) responding slot(s)")
+        HIDPPTrace.log("└─ probeSlots done")
         return results
     }
 
-    private func pingSlot(_ slot: UInt8, timeout: Duration) async -> PairedDeviceSummary? {
-        HIDPPTrace.log("  ping slot \(slot)")
-        // Root.GetProtocolVersion: feature index 0, function 1. Send a
-        // distinctive byte as parameters[2] (the "ping data"); the device
-        // echoes it back in the response, which proves it's the right
-        // responder rather than stale traffic.
+    private func probeStatus(of slot: UInt8, timeout: Duration) async -> SlotStatus {
+        HIDPPTrace.log("  probe slot \(slot)")
         let pingByte: UInt8 = 0x5A
-        guard let resp = try? await featureRequest(
-            deviceIndex: slot,
-            featureIndex: 0,
-            function: 1,
-            parameters: [0x00, 0x00, pingByte],
-            kind: .short,
-            timeout: timeout
-        ) else { return nil }
-
-        let p = resp.parameters
-        // Successful ping echoes pingByte at params[2]; some firmwares place
-        // it at params[0] for short-report variants. Accept either.
-        let echoed = (p.count >= 3 && p[2] == pingByte) || (p.first == pingByte)
-        guard echoed else { return nil }
-
-        let major = p.count >= 1 ? p[0] : 0
-        let minor = p.count >= 2 ? p[1] : 0
-        return PairedDeviceSummary(slot: Int(slot), hidppMajor: major, hidppMinor: minor)
+        do {
+            let resp = try await featureRequest(
+                deviceIndex: slot,
+                featureIndex: 0, function: 1,
+                parameters: [0x00, 0x00, pingByte],
+                kind: .short,
+                timeout: timeout
+            )
+            let p = resp.parameters
+            let major = p.count >= 1 ? p[0] : 0
+            let minor = p.count >= 2 ? p[1] : 0
+            return .respondingHIDPP(major: major, minor: minor)
+        } catch HIDPPError.protocolError(_, _, 0x09) {
+            return .empty
+        } catch {
+            return .silent
+        }
     }
 
     // MARK: - HID++ request/response
@@ -499,13 +497,26 @@ public final class Receiver: @unchecked Sendable {
 
 private func hexBCD(_ b: UInt8) -> String { String(format: "%02X", b) }
 
-/// Coarse summary of a paired device discovered by pinging its slot.
-public struct PairedDeviceSummary: Sendable, Hashable {
-    public let slot: Int
-    public let hidppMajor: UInt8
-    public let hidppMinor: UInt8
+/// What we found when probing a single slot.
+public enum SlotStatus: Sendable, Hashable {
+    /// Receiver reported "unsupported" — no device paired at this slot.
+    case empty
+    /// Slot has a device paired but it didn't answer the ping (usually asleep).
+    case silent
+    /// Slot has a device paired and it answered the HID++ 2.0 ping.
+    case respondingHIDPP(major: UInt8, minor: UInt8)
+}
 
-    public var hidppVersion: String { "\(hidppMajor).\(hidppMinor)" }
+public struct SlotProbe: Sendable, Hashable {
+    public let slot: Int
+    public let status: SlotStatus
+
+    public var isPaired: Bool {
+        switch status {
+        case .empty: return false
+        case .silent, .respondingHIDPP: return true
+        }
+    }
 }
 
 /// Decoded receiver information. All fields optional because byte layouts
