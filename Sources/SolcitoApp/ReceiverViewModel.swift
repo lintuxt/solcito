@@ -37,6 +37,11 @@ final class ReceiverViewModel: Identifiable {
         return r
     }
 
+    /// Light-touch load: just the receiver-info reads. Skips the 6-slot
+    /// HID++ 2.0 ping sweep because chaining ~12 requests in rapid
+    /// succession on this firmware wedges the receiver's state machine —
+    /// the next request (e.g. `beginPairing`) then silently times out.
+    /// Use `refreshAll()` when slot discovery is explicitly desired.
     func loadInfo() async {
         guard hasHIDPPInterface else {
             lastError = "this receiver doesn't expose a HID++ interface"
@@ -46,17 +51,31 @@ final class ReceiverViewModel: Identifiable {
         defer { isLoadingInfo = false }
         do {
             let r = try ensureOpen()
-            // IMPORTANT: serialize. info() and pairedDevices() both iterate
-            // device.inputReports, and AsyncStream yields each event to
-            // exactly one consumer — running them concurrently makes
-            // responses land at the wrong iterator and most requests time
-            // out (manifests as missing firmware / empty devices list).
             self.info = try await r.info()
-            self.pairedDevices = await r.pairedDevices()
             self.lastError = nil
         } catch {
             self.lastError = "\(error)"
         }
+    }
+
+    /// Ping all slots 1..6 looking for paired devices that answer HID++ 2.0.
+    /// Asleep / HID++ 1.0-only devices won't respond. Always user-triggered.
+    func discoverPairedDevices() async {
+        guard hasHIDPPInterface else { return }
+        isLoadingInfo = true
+        defer { isLoadingInfo = false }
+        do {
+            let r = try ensureOpen()
+            self.pairedDevices = await r.pairedDevices()
+        } catch {
+            self.lastError = "\(error)"
+        }
+    }
+
+    /// Full refresh: info + paired-device discovery, sequentially.
+    func refreshAll() async {
+        await loadInfo()
+        await discoverPairedDevices()
     }
 
     func startPairing(timeoutSeconds: UInt8 = 30) async {
@@ -92,8 +111,11 @@ final class ReceiverViewModel: Identifiable {
             lastError = "\(error)"
         }
 
-        // Refresh post-pair so any new device shows in the list.
-        await loadInfo()
+        // After a pair attempt, refresh receiver info AND ping slots so a
+        // newly-paired device shows up. This runs whether pair succeeded
+        // or not; on failure it just reloads stale state, but at least
+        // doesn't compound the wedge by running before the next attempt.
+        await refreshAll()
     }
 
     func unpair(slot: Int) async {
@@ -101,7 +123,7 @@ final class ReceiverViewModel: Identifiable {
         do {
             let r = try ensureOpen()
             try await r.unpair(slot: UInt8(slot))
-            await loadInfo()
+            await refreshAll()
         } catch {
             lastError = "\(error)"
         }

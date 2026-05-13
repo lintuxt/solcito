@@ -22,7 +22,12 @@ struct MainWindowView: View {
         }
         .toolbar {
             ToolbarItem {
-                Button { state.refresh() } label: {
+                Button {
+                    state.refresh()
+                    if let sel = state.selectedReceiver {
+                        Task { await sel.refreshAll() }
+                    }
+                } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
             }
