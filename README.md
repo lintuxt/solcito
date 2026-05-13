@@ -1,5 +1,7 @@
 # solcito
 
+[![CI](https://github.com/lintuxt/solcito/actions/workflows/ci.yml/badge.svg)](https://github.com/lintuxt/solcito/actions/workflows/ci.yml)
+
 A macOS-native manager for Logitech wireless receivers (Unifying, Bolt, Lightspeed, Nano) — pair, unpair, and inspect connected devices.
 
 Inspired by [Solaar](https://github.com/pwr-Solaar/Solaar), reimplemented in Swift on top of IOKit HID. No Python runtime, no hidapi, no Homebrew dependency.
