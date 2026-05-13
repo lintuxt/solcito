@@ -133,7 +133,7 @@ private func runPair() async {
     guard !receivers.isEmpty else {
         die("No Logitech receiver found. Plug in your USB receiver and try again.")
     }
-    let r = chooseReceiver(from: receivers, prompt: "Which receiver should I pair to?")
+    let r = await chooseReceiver(from: receivers, prompt: "Which receiver should I pair to?")
     guard let hidpp = r.hidppInterface else {
         die("\(r.id.name) doesn't support pairing.")
     }
@@ -213,7 +213,7 @@ private func runUnpair(slot: UInt8) async {
     guard !receivers.isEmpty else {
         die("No Logitech receiver found.")
     }
-    let r = chooseReceiver(from: receivers, prompt: "Which receiver has the device in slot \(slot)?")
+    let r = await chooseReceiver(from: receivers, prompt: "Which receiver has the device in slot \(slot)?")
     guard let hidpp = r.hidppInterface else {
         die("\(r.id.name) doesn't support unpairing.")
     }
@@ -237,12 +237,19 @@ private func runUnpair(slot: UInt8) async {
 
 // MARK: - helpers
 
-private func chooseReceiver(from receivers: [DiscoveredReceiver], prompt: String) -> DiscoveredReceiver {
+private func chooseReceiver(from receivers: [DiscoveredReceiver], prompt: String) async -> DiscoveredReceiver {
     if receivers.count == 1 { return receivers[0] }
+
+    write("Scanning receivers…")
+    var counts: [Int?] = []
+    for r in receivers {
+        counts.append(await pairedCount(r))
+    }
+    write("\r\u{1B}[K")  // clear "Scanning…" line
 
     print("Multiple receivers found:")
     for (i, r) in receivers.enumerated() {
-        print("  [\(i + 1)] \(r.id.name)")
+        print("  [\(i + 1)] \(r.id.name) \(summarize(count: counts[i]))")
     }
     print()
 
@@ -257,6 +264,29 @@ private func chooseReceiver(from receivers: [DiscoveredReceiver], prompt: String
             return receivers[n - 1]
         }
         print("Please enter a number between 1 and \(receivers.count).")
+    }
+}
+
+private func pairedCount(_ r: DiscoveredReceiver) async -> Int? {
+    guard let hidpp = r.hidppInterface else { return nil }
+    let device = HIDDevice(handle: hidpp)
+    let receiver = Receiver(id: r.id, hidppDevice: device)
+    defer { receiver.close() }
+    do {
+        try receiver.open()
+    } catch {
+        return nil
+    }
+    let probes = await receiver.probeSlots()
+    return probes.filter { $0.isPaired }.count
+}
+
+private func summarize(count: Int?) -> String {
+    switch count {
+    case nil:  return "(can't read)"
+    case 0:    return "(empty)"
+    case 1:    return "(1 device)"
+    case let n?: return "(\(n) devices)"
     }
 }
 
