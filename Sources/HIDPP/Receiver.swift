@@ -163,25 +163,31 @@ public final class Receiver: @unchecked Sendable {
     /// have their pair button pressed within `timeoutSeconds` will be
     /// assigned to an open slot. `slot == 0` lets the receiver pick any
     /// available slot; pass 1...maxSlots to force a specific one.
+    /// Open the pairing lock so a new device announcing itself within
+    /// `timeoutSeconds` gets attached. Action byte is **0x01** per Solaar's
+    /// `set_lock(lock_closed=False)` — the previous code shipped 0x02 here
+    /// (Solaar's "close" action), which is why no device ever actually
+    /// paired through solcito.
     public func beginPairing(timeoutSeconds: UInt8 = 30, slot: UInt8 = 0) async throws {
         HIDPPTrace.log("┌─ beginPairing(timeout: \(timeoutSeconds)s, slot: \(slot))")
         _ = try await request(
             kind: .short,
             subID: .setRegisterShort,
             register: .receiverPairing,
-            parameters: [0x02, slot, timeoutSeconds]
+            parameters: [0x01, slot, timeoutSeconds]
         )
         HIDPPTrace.log("└─ beginPairing OK")
     }
 
-    /// Cancel an in-progress pairing window early.
+    /// Close the pairing lock (cancel an open window). Action byte is **0x02**
+    /// per Solaar's `set_lock(lock_closed=True)`.
     public func cancelPairing() async throws {
         HIDPPTrace.log("┌─ cancelPairing()")
         _ = try await request(
             kind: .short,
             subID: .setRegisterShort,
             register: .receiverPairing,
-            parameters: [0x01, 0x00, 0x00]
+            parameters: [0x02, 0x00, 0x00]
         )
         HIDPPTrace.log("└─ cancelPairing OK")
     }

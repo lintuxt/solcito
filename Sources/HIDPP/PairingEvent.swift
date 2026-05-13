@@ -11,17 +11,20 @@ public enum PairingEvent: Sendable {
     case raw(HIDPPReport)
 
     public static func decode(_ report: HIDPPReport) -> PairingEvent {
-        // Pairing-lock state change (HID++ 1.0). Empirically on Unifying
-        // firmware the `address` byte stays 0; `params[0]` carries the new
-        // lock state: 0x00 = lock closed (clean), 0x01 = lock opened,
-        // anything else = closed with an error code (no slots, timeout, etc).
+        // Pairing-lock state change (HID++ 1.0). Solaar's handler
+        // (lib/logitech_receiver/notifications.py, handle_pairing_lock):
+        //   lock_open  = bool(address & 0x01)
+        //   pair_error = data[0]   (0 = no error)
+        // So the address byte's bit 0 carries the new lock state, and
+        // params[0] carries an error code if pairing failed.
         if report.subID == HIDPP10.Notification.pairingLockChanged.rawValue {
-            let state = report.parameters.first ?? 0
-            switch state {
-            case 0x00: return .lockClosed(success: true, errorCode: nil)
-            case 0x01: return .lockOpened
-            default:   return .lockClosed(success: false, errorCode: state)
+            let lockIsOpen = (report.address & 0x01) != 0
+            let pairError = report.parameters.first ?? 0
+            if lockIsOpen {
+                return .lockOpened
             }
+            return .lockClosed(success: pairError == 0,
+                               errorCode: pairError == 0 ? nil : pairError)
         }
 
         // Device connect/disconnect notifications: deviceIndex is the slot

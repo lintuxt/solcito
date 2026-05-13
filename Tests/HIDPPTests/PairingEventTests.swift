@@ -8,13 +8,13 @@ struct PairingEventTests {
         HIDPPReport(kind: .short, deviceIndex: deviceIndex, subID: subID, address: address, parameters: params)
     }
 
-    @Test("0x4A with params[0]=1 → lockOpened")
+    @Test("0x4A with address bit 0 set → lockOpened")
     func lockOpened() {
-        let r = short(deviceIndex: 0xFF, subID: 0x4A, address: 0x00, params: [0x01, 0x00, 0x00])
+        let r = short(deviceIndex: 0xFF, subID: 0x4A, address: 0x01, params: [0x00, 0x00, 0x00])
         if case .lockOpened = PairingEvent.decode(r) { } else { Issue.record("expected lockOpened") }
     }
 
-    @Test("0x4A with params[0]=0 → lockClosed success")
+    @Test("0x4A with address bit 0 clear, no error → lockClosed success")
     func lockClosedClean() {
         let r = short(deviceIndex: 0xFF, subID: 0x4A, address: 0x00, params: [0x00, 0x00, 0x00])
         if case .lockClosed(let success, let code) = PairingEvent.decode(r) {
@@ -23,7 +23,7 @@ struct PairingEventTests {
         } else { Issue.record("expected lockClosed") }
     }
 
-    @Test("0x4A with non-zero state byte → lockClosed failure with code")
+    @Test("0x4A with non-zero pair-error byte → lockClosed failure with code")
     func lockClosedError() {
         let r = short(deviceIndex: 0xFF, subID: 0x4A, address: 0x00, params: [0x06, 0x00, 0x00])
         if case .lockClosed(let success, let code) = PairingEvent.decode(r) {
