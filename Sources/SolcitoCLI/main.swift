@@ -133,21 +133,10 @@ private func runPair() async {
     guard !receivers.isEmpty else {
         die("No Logitech receiver found. Plug in your USB receiver and try again.")
     }
-    let r = await chooseReceiver(from: receivers, prompt: "Which receiver should I pair to?")
-    guard let hidpp = r.hidppInterface else {
-        die("\(r.id.name) doesn't support pairing.")
-    }
+    let (r, receiver) = await chooseReceiver(from: receivers, prompt: "Which receiver should I pair to?")
+    defer { receiver.close() }
     guard r.id.kind.supportsPairing else {
         die("\(r.id.name) can't pair new devices (this receiver type is fixed).")
-    }
-
-    let device = HIDDevice(handle: hidpp)
-    let receiver = Receiver(id: r.id, hidppDevice: device)
-    defer { receiver.close() }
-    do {
-        try receiver.open()
-    } catch {
-        die("Couldn't open the receiver. Quit Logi Options+ or Logitech G Hub and try again.")
     }
 
     let timeoutSeconds: UInt8 = 30
@@ -213,19 +202,8 @@ private func runUnpair(slot: UInt8) async {
     guard !receivers.isEmpty else {
         die("No Logitech receiver found.")
     }
-    let r = await chooseReceiver(from: receivers, prompt: "Which receiver has the device in slot \(slot)?")
-    guard let hidpp = r.hidppInterface else {
-        die("\(r.id.name) doesn't support unpairing.")
-    }
-
-    let device = HIDDevice(handle: hidpp)
-    let receiver = Receiver(id: r.id, hidppDevice: device)
+    let (_, receiver) = await chooseReceiver(from: receivers, prompt: "Which receiver has the device in slot \(slot)?")
     defer { receiver.close() }
-    do {
-        try receiver.open()
-    } catch {
-        die("Couldn't open the receiver. Quit Logi Options+ or Logitech G Hub and try again.")
-    }
 
     do {
         try await receiver.unpair(slot: slot)
@@ -237,48 +215,74 @@ private func runUnpair(slot: UInt8) async {
 
 // MARK: - helpers
 
-private func chooseReceiver(from receivers: [DiscoveredReceiver], prompt: String) async -> DiscoveredReceiver {
-    if receivers.count == 1 { return receivers[0] }
-
-    write("Scanning receivers…")
-    var counts: [Int?] = []
+/// Opens every receiver, probes them concurrently (sequentially per
+/// receiver so a single dispatcher serves each one), and lets the user pick
+/// one. The chosen receiver is returned still open; the others are closed.
+///
+/// We open each `IOHIDDevice` exactly once because IOKit's HID stack
+/// doesn't allow a fresh open after IOHIDDeviceCancel has torn down the
+/// dispatch queue — re-opening within the same process trace-traps.
+private func chooseReceiver(from receivers: [DiscoveredReceiver], prompt: String) async -> (DiscoveredReceiver, Receiver) {
+    // Open each receiver up-front. Skips ones without a HID++ interface or
+    // that we can't talk to (Logi Options+ holding exclusive access, etc.).
+    var opened: [(meta: DiscoveredReceiver, receiver: Receiver?, count: Int?)] = []
+    if receivers.count > 1 { write("Scanning receivers…") }
     for r in receivers {
-        counts.append(await pairedCount(r))
+        guard let hidpp = r.hidppInterface else {
+            opened.append((r, nil, nil)); continue
+        }
+        let device = HIDDevice(handle: hidpp)
+        let receiver = Receiver(id: r.id, hidppDevice: device)
+        do {
+            try receiver.open()
+        } catch {
+            opened.append((r, nil, nil)); continue
+        }
+        let probes = await receiver.probeSlots()
+        let count = probes.filter { $0.isPaired }.count
+        opened.append((r, receiver, count))
     }
-    write("\r\u{1B}[K")  // clear "Scanning…" line
+    if receivers.count > 1 { write("\r\u{1B}[K") }
 
-    print("Multiple receivers found:")
-    for (i, r) in receivers.enumerated() {
-        print("  [\(i + 1)] \(r.id.name) \(summarize(count: counts[i]))")
+    let pickIndex: Int
+    if opened.count == 1 {
+        pickIndex = 0
+    } else {
+        print("Multiple receivers found:")
+        for (i, item) in opened.enumerated() {
+            print("  [\(i + 1)] \(item.meta.id.name) \(summarize(count: item.count))")
+        }
+        print()
+        pickIndex = readChoice(prompt: prompt, range: 1...opened.count, opened: opened) - 1
     }
-    print()
 
+    // Close every receiver except the chosen one.
+    for (i, item) in opened.enumerated() where i != pickIndex {
+        item.receiver?.close()
+    }
+
+    guard let receiver = opened[pickIndex].receiver else {
+        die("Couldn't open \(opened[pickIndex].meta.id.name). Quit Logi Options+ or Logitech G Hub and try again.")
+    }
+    return (opened[pickIndex].meta, receiver)
+}
+
+private func readChoice(
+    prompt: String,
+    range: ClosedRange<Int>,
+    opened: [(meta: DiscoveredReceiver, receiver: Receiver?, count: Int?)]
+) -> Int {
     while true {
-        write("\(prompt) [1-\(receivers.count)]: ")
+        write("\(prompt) [\(range.lowerBound)-\(range.upperBound)]: ")
         guard let line = readLine() else {
+            for item in opened { item.receiver?.close() }
             stderr("")
             die("No selection made.")
         }
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let n = Int(trimmed), (1...receivers.count).contains(n) {
-            return receivers[n - 1]
-        }
-        print("Please enter a number between 1 and \(receivers.count).")
+        if let n = Int(trimmed), range.contains(n) { return n }
+        print("Please enter a number between \(range.lowerBound) and \(range.upperBound).")
     }
-}
-
-private func pairedCount(_ r: DiscoveredReceiver) async -> Int? {
-    guard let hidpp = r.hidppInterface else { return nil }
-    let device = HIDDevice(handle: hidpp)
-    let receiver = Receiver(id: r.id, hidppDevice: device)
-    defer { receiver.close() }
-    do {
-        try receiver.open()
-    } catch {
-        return nil
-    }
-    let probes = await receiver.probeSlots()
-    return probes.filter { $0.isPaired }.count
 }
 
 private func summarize(count: Int?) -> String {
