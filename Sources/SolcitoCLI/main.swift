@@ -26,6 +26,17 @@ struct SolcitoCLI {
             await runUnpair(slot: slot, receiverIndex: rest.dropFirst().first.flatMap(Int.init))
         case "devices":
             await runDevices(receiverIndex: args.dropFirst().first.flatMap(Int.init))
+        case "wedge":
+            // Reproduces what the SwiftUI app does on view-appear: info()
+            // then pairedDevices() then beginPairing. The app's pair fails
+            // after this sequence; CLI's solo pair works. This command lets
+            // us see — with SOLCITO_HIDPP_TRACE=1 — exactly where the wedge
+            // shows up in the trace.
+            let rest = Array(args.dropFirst())
+            await runWedge(
+                receiverIndex: rest.first.flatMap(Int.init),
+                pairTimeout: rest.dropFirst().first.flatMap(UInt8.init) ?? 5
+            )
         case "--help", "-h", "help":
             printUsage()
         case let other?:
@@ -47,6 +58,9 @@ private func printUsage() {
                                         Press the pair button on your device.
       solcito-cli unpair <slot> [N]     Unpair the device at slot (1..6) on receiver N.
       solcito-cli devices [N]           List paired devices on receiver N (HID++ 2.0 ping).
+      solcito-cli wedge [N] [timeout]   Diagnostic: run info() + pairedDevices() then
+                                        attempt beginPairing in one process. Used with
+                                        SOLCITO_HIDPP_TRACE=1 to reproduce app behavior.
       solcito-cli help                  Show this help
     """)
 }
@@ -218,6 +232,43 @@ private func runDevices(receiverIndex: Int?) async {
     }
     for d in devices {
         print("  Slot \(d.slot): HID++ \(d.hidppVersion)")
+    }
+}
+
+private func runWedge(receiverIndex: Int?, pairTimeout: UInt8) async {
+    let (r, receiver) = await openHIDPP(receiverIndex: receiverIndex)
+    defer { receiver.close() }
+
+    print("Receiver: \(r.id.name) (\(r.id.kind.displayName))")
+    print()
+    print("step 1/3: info()")
+    do {
+        let info = try await receiver.info()
+        print("  firmware:  \(info.firmwareVersion ?? "unknown")")
+        print("  serial:    \(info.serialNumber ?? "unknown")")
+        print("  max slots: \(info.maxPairedDevices.map(String.init) ?? "unknown")")
+        print("  connected: \(info.connectedDeviceCount.map(String.init) ?? "unknown")")
+    } catch {
+        print("  ✗ \(error)")
+    }
+    print()
+    print("step 2/3: pairedDevices() (slot ping sweep)")
+    let devices = await receiver.pairedDevices()
+    if devices.isEmpty {
+        print("  no responses")
+    } else {
+        for d in devices { print("  slot \(d.slot): HID++ \(d.hidppVersion)") }
+    }
+    print()
+    print("step 3/3: beginPairing(timeout: \(pairTimeout)s)")
+    do {
+        try await receiver.beginPairing(timeoutSeconds: pairTimeout)
+        print("  ✓ pairing window open. Letting it run \(pairTimeout)s…")
+        try? await Task.sleep(for: .seconds(Int(pairTimeout)))
+        try? await receiver.cancelPairing()
+        print("  pairing window closed.")
+    } catch {
+        print("  ✗ \(error)")
     }
 }
 

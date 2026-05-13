@@ -1,13 +1,38 @@
 import Foundation
 import HIDTransport
+import os
 
 /// High-level handle for a Logitech receiver. Wraps the HID++ interface and
 /// exposes typed operations (read receiver info, list paired devices, …).
+///
+/// Concurrency model: a single internal `dispatchTask` consumes
+/// `device.inputReports` for the lifetime of the open device. Every parsed
+/// report is routed to either (a) a pending `send()` waiter matched on
+/// sub-ID + address (with 1.0/2.0 error correlation) or (b) all current
+/// `notifications` subscribers as a multicast. No caller ever iterates the
+/// underlying `device.inputReports` directly, so single-consumer
+/// `AsyncStream` semantics don't burn us — multiple concurrent `send()`
+/// calls and notification observers all coexist cleanly.
 public final class Receiver: @unchecked Sendable {
 
     public let id: ReceiverID
     public let interface: HIDDeviceInfo
     private let device: HIDDevice
+
+    private struct Waiter: Sendable {
+        let id: UUID
+        let expectedSubID: UInt8
+        let expectedAddress: UInt8
+        let continuation: CheckedContinuation<HIDPPReport, Error>
+    }
+
+    private struct State: Sendable {
+        var waiters: [Waiter] = []
+        var subscribers: [UUID: AsyncStream<HIDPPReport>.Continuation] = [:]
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private var dispatchTask: Task<Void, Never>? = nil
 
     public init(id: ReceiverID, hidppDevice: HIDDevice) {
         self.id = id
@@ -15,23 +40,106 @@ public final class Receiver: @unchecked Sendable {
         self.device = hidppDevice
     }
 
-    public func open() throws { try device.open() }
-    public func close()       { device.close() }
+    public func open() throws {
+        try device.open()
+        startDispatching()
+    }
 
-    /// Raw inbound HID++ reports — notifications, async responses, anything
-    /// the receiver volunteers. Callers should consume this AFTER any pending
-    /// `request()` calls have completed (single-iterator model).
-    public var notifications: AsyncStream<HIDPPReport> {
-        AsyncStream { continuation in
-            let task = Task {
-                for await raw in self.device.inputReports {
-                    if let parsed = HIDPPReport.parse(reportID: raw.reportID, payload: raw.payload) {
-                        continuation.yield(parsed)
-                    }
+    public func close() {
+        let task = dispatchTask
+        dispatchTask = nil
+        task?.cancel()
+
+        // Drain pending state: resume waiters with cancellation, finish
+        // subscribers cleanly so anyone iterating exits their for-await.
+        let (pending, subs) = state.withLock { state -> ([Waiter], [AsyncStream<HIDPPReport>.Continuation]) in
+            let p = state.waiters
+            let s = Array(state.subscribers.values)
+            state.waiters.removeAll()
+            state.subscribers.removeAll()
+            return (p, s)
+        }
+
+        for w in pending { w.continuation.resume(throwing: CancellationError()) }
+        for s in subs { s.finish() }
+
+        device.close()
+    }
+
+    private func startDispatching() {
+        dispatchTask = Task { [weak self] in
+            guard let self else { return }
+            for await raw in self.device.inputReports {
+                if Task.isCancelled { break }
+                guard let report = HIDPPReport.parse(reportID: raw.reportID, payload: raw.payload) else {
+                    HIDPPTrace.log("  ? unparseable id=\(HIDPPTrace.hex(raw.reportID)) len=\(raw.payload.count)")
+                    continue
                 }
-                continuation.finish()
+                self.dispatch(report)
             }
-            continuation.onTermination = { _ in task.cancel() }
+            HIDPPTrace.log("dispatcher: input stream ended")
+        }
+    }
+
+    private enum DispatchAction {
+        case resumeSuccess(Waiter)
+        case resumeError(Waiter, HIDPPError)
+        case broadcast([AsyncStream<HIDPPReport>.Continuation])
+    }
+
+    private func dispatch(_ report: HIDPPReport) {
+        let action: DispatchAction = state.withLock { state in
+            for (i, w) in state.waiters.enumerated() {
+                // Direct match.
+                if report.subID == w.expectedSubID && report.address == w.expectedAddress {
+                    state.waiters.remove(at: i)
+                    return .resumeSuccess(w)
+                }
+                // Error correlation (1.0: subID=0x8F; 2.0: subID=0xFF;
+                // both carry original sub/addr in address + parameters[0]).
+                if report.isError, let err = report.errorPayload,
+                   err.originalSubID == w.expectedSubID,
+                   err.originalAddress == w.expectedAddress {
+                    state.waiters.remove(at: i)
+                    return .resumeError(w, HIDPPError.protocolError(
+                        originalSubID: err.originalSubID,
+                        register: err.originalAddress,
+                        code: err.code
+                    ))
+                }
+            }
+            return .broadcast(Array(state.subscribers.values))
+        }
+
+        switch action {
+        case .resumeSuccess(let w):
+            HIDPPTrace.log("← match → waiter sub=\(HIDPPTrace.hex(w.expectedSubID)) addr=\(HIDPPTrace.hex(w.expectedAddress)) params=[\(HIDPPTrace.hex(report.parameters))]")
+            w.continuation.resume(returning: report)
+        case .resumeError(let w, let e):
+            HIDPPTrace.log("× err  → waiter sub=\(HIDPPTrace.hex(w.expectedSubID)) addr=\(HIDPPTrace.hex(w.expectedAddress)) code=\(HIDPPTrace.hex(report.errorPayload?.code ?? 0))")
+            w.continuation.resume(throwing: e)
+        case .broadcast(let subs):
+            HIDPPTrace.log("· notif \(HIDPPTrace.subIDLabel(report.subID)) dev=\(HIDPPTrace.hex(report.deviceIndex)) addr=\(HIDPPTrace.hex(report.address)) → \(subs.count) sub(s)")
+            for s in subs { s.yield(report) }
+        }
+    }
+
+    /// Multicast stream of notifications (reports not matched to a pending
+    /// `send()` waiter). Every active subscriber receives every event.
+    /// Subscribers are added/removed automatically as their for-await
+    /// iterators come and go.
+    public var notifications: AsyncStream<HIDPPReport> {
+        let subscriberID = UUID()
+        return AsyncStream { continuation in
+            self.state.withLock { state in
+                state.subscribers[subscriberID] = continuation
+            }
+            continuation.onTermination = { [weak self] _ in
+                guard let self else { return }
+                _ = self.state.withLock { state in
+                    state.subscribers.removeValue(forKey: subscriberID)
+                }
+            }
         }
     }
 
@@ -56,33 +164,39 @@ public final class Receiver: @unchecked Sendable {
     /// assigned to an open slot. `slot == 0` lets the receiver pick any
     /// available slot; pass 1...maxSlots to force a specific one.
     public func beginPairing(timeoutSeconds: UInt8 = 30, slot: UInt8 = 0) async throws {
+        HIDPPTrace.log("┌─ beginPairing(timeout: \(timeoutSeconds)s, slot: \(slot))")
         _ = try await request(
             kind: .short,
             subID: .setRegisterShort,
             register: .receiverPairing,
             parameters: [0x02, slot, timeoutSeconds]
         )
+        HIDPPTrace.log("└─ beginPairing OK")
     }
 
     /// Cancel an in-progress pairing window early.
     public func cancelPairing() async throws {
+        HIDPPTrace.log("┌─ cancelPairing()")
         _ = try await request(
             kind: .short,
             subID: .setRegisterShort,
             register: .receiverPairing,
             parameters: [0x01, 0x00, 0x00]
         )
+        HIDPPTrace.log("└─ cancelPairing OK")
     }
 
     /// Unpair the device at the given slot (1...maxSlots). Solaar source:
     /// `write_register(Registers.RECEIVER_PAIRING, 0x03, slot)`.
     public func unpair(slot: UInt8) async throws {
+        HIDPPTrace.log("┌─ unpair(slot: \(slot))")
         _ = try await request(
             kind: .short,
             subID: .setRegisterShort,
             register: .receiverPairing,
             parameters: [0x03, slot, 0x00]
         )
+        HIDPPTrace.log("└─ unpair OK")
     }
 
     // MARK: - Paired-device discovery
@@ -92,16 +206,19 @@ public final class Receiver: @unchecked Sendable {
     /// function 1) — works regardless of whether the receiver itself speaks
     /// HID++ 2.0, because the paired devices answer for themselves.
     public func pairedDevices(maxSlots: Int = 6, perSlotTimeout: Duration = .milliseconds(400)) async -> [PairedDeviceSummary] {
+        HIDPPTrace.log("┌─ pairedDevices(maxSlots: \(maxSlots), perSlotTimeout: \(perSlotTimeout))")
         var results: [PairedDeviceSummary] = []
         for slot in 1...UInt8(maxSlots) {
             if let summary = await pingSlot(slot, timeout: perSlotTimeout) {
                 results.append(summary)
             }
         }
+        HIDPPTrace.log("└─ pairedDevices found \(results.count) responding slot(s)")
         return results
     }
 
     private func pingSlot(_ slot: UInt8, timeout: Duration) async -> PairedDeviceSummary? {
+        HIDPPTrace.log("  ping slot \(slot)")
         // Root.GetProtocolVersion: feature index 0, function 1. Send a
         // distinctive byte as parameters[2] (the "ping data"); the device
         // echoes it back in the response, which proves it's the right
@@ -141,40 +258,53 @@ public final class Receiver: @unchecked Sendable {
     /// Callers serialize their own work; a follow-up slice will move this
     /// behind an actor that queues internally.
     public func send(_ outgoing: HIDPPReport, timeout: Duration = .seconds(2)) async throws -> HIDPPReport {
-        try device.send(reportID: outgoing.kind.rawValue, outgoing.serializedPayload())
+        let waiterID = UUID()
         let expectedSubID = outgoing.subID
         let expectedAddress = outgoing.address
 
-        return try await withThrowingTaskGroup(of: HIDPPReport.self) { group in
-            group.addTask {
-                for await report in self.device.inputReports {
-                    guard let hidpp = HIDPPReport.parse(reportID: report.reportID, payload: report.payload) else { continue }
-                    // Error correlation: in both 1.0 and 2.0, the error
-                    // report's `address` field carries the *original* subID
-                    // (or feature index), and `parameters[0]` carries the
-                    // original register / fn|swid.
-                    if hidpp.isError,
-                       let err = hidpp.errorPayload,
-                       err.originalSubID == expectedSubID,
-                       err.originalAddress == expectedAddress {
-                        throw HIDPPError.protocolError(
-                            originalSubID: err.originalSubID,
-                            register: err.originalAddress,
-                            code: err.code
-                        )
-                    }
-                    if hidpp.subID == expectedSubID && hidpp.address == expectedAddress {
-                        return hidpp
-                    }
+        HIDPPTrace.log("→ send \(HIDPPTrace.subIDLabel(expectedSubID)) "
+            + "dev=\(HIDPPTrace.hex(outgoing.deviceIndex)) "
+            + "addr=\(HIDPPTrace.hex(expectedAddress)) "
+            + "params=[\(HIDPPTrace.hex(outgoing.parameters))] "
+            + "kind=\(outgoing.kind) timeout=\(timeout)")
+
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<HIDPPReport, Error>) in
+            // Register waiter BEFORE sending so a fast response isn't missed.
+            state.withLock { state in
+                state.waiters.append(Waiter(
+                    id: waiterID,
+                    expectedSubID: expectedSubID,
+                    expectedAddress: expectedAddress,
+                    continuation: cont
+                ))
+            }
+
+            // Independent timeout task. If the dispatcher already removed
+            // the waiter (response arrived), this is a no-op.
+            Task { [weak self] in
+                try? await Task.sleep(for: timeout)
+                guard let self else { return }
+                let removed = self.state.withLock { state -> Waiter? in
+                    guard let i = state.waiters.firstIndex(where: { $0.id == waiterID }) else { return nil }
+                    return state.waiters.remove(at: i)
                 }
-                throw HIDPPError.timeout
+                if let w = removed {
+                    HIDPPTrace.log("⏰ timeout: \(HIDPPTrace.subIDLabel(expectedSubID)) addr=\(HIDPPTrace.hex(expectedAddress))")
+                    w.continuation.resume(throwing: HIDPPError.timeout)
+                }
             }
-            group.addTask {
-                try await Task.sleep(for: timeout)
-                throw HIDPPError.timeout
+
+            // Now actually send. If the transport call fails synchronously,
+            // unregister the waiter and resume with that error.
+            do {
+                try device.send(reportID: outgoing.kind.rawValue, outgoing.serializedPayload())
+            } catch {
+                let removed = state.withLock { state -> Waiter? in
+                    guard let i = state.waiters.firstIndex(where: { $0.id == waiterID }) else { return nil }
+                    return state.waiters.remove(at: i)
+                }
+                if let w = removed { w.continuation.resume(throwing: error) }
             }
-            defer { group.cancelAll() }
-            return try await group.next()!
         }
     }
 
