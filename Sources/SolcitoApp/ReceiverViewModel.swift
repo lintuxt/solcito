@@ -78,7 +78,13 @@ final class ReceiverViewModel: Identifiable {
             }
 
             try? await Task.sleep(for: .seconds(Int(timeoutSeconds)))
+            // Cancel AND wait for the consumer to actually exit before we
+            // start another request on the device — otherwise its iterator
+            // on device.inputReports overlaps with cancelPairing's iterator
+            // and they steal each other's events (manifests as
+            // "HID++ request timed out" on subsequent pair attempts).
             consumer.cancel()
+            _ = await consumer.value
             try? await r.cancelPairing()
             pairingLog.append("Pairing window closed.")
         } catch {
