@@ -22,6 +22,8 @@ struct SolcitoCLI {
             printHelp()
         case "version", "--version", "-v":
             print("solcito \(Version.current)")
+        case "upgrade":
+            await runUpgrade()
         case let other?:
             stderr("Unknown command: \(other)")
             stderr("Run `solcito help` to see available commands.")
@@ -43,6 +45,7 @@ private func printHelp() {
         ("",                       "(or press its \"Connect\" button if it has one)."),
         ("solcito unpair <slot>",  "Remove the device in the given slot (1–6)."),
         ("solcito version",        "Print the version and exit."),
+        ("solcito upgrade",        "Check for and install the latest release."),
         ("solcito help",           "Show this help."),
     ]
     for (cmd, desc) in rows {
@@ -359,11 +362,11 @@ private func write(_ s: String) {
     FileHandle.standardOutput.write(Data(s.utf8))
 }
 
-private func stderr(_ msg: String) {
+func stderr(_ msg: String) {
     FileHandle.standardError.write(Data("\(msg)\n".utf8))
 }
 
-private func die(_ msg: String) -> Never {
+func die(_ msg: String) -> Never {
     stderr(msg)
     exit(1)
 }
