@@ -142,15 +142,13 @@ private func printReceiverStatus(_ r: DiscoveredReceiver, label: String?) async 
 
 /// Human-readable battery label, colored by remaining charge. Returns nil
 /// when no reading is available (asleep device, feature not supported).
-/// 0% + charging is treated as "reading not yet stabilized" — common right
-/// after plug-in — and rendered as just "charging" rather than "0% ⚡︎".
+/// The ⚡ glyph appears next to the percentage whenever the device reports
+/// charging — including a freshly-plugged-in device still reading 0%.
 private func formatBattery(_ reading: BatteryReading?) -> String? {
     guard let r = reading else { return nil }
-    if r.isCharging && r.percent == 0 {
-        return Tone.subtle("charging")
-    }
     let pct = "\(r.percent)%"
-    if r.isCharging    { return "\(Tone.ok(pct))\(Tone.subtle(" ⚡︎"))" }
+    let bolt = " " + Tone.warn("⚡")
+    if r.isCharging    { return "\(Tone.ok(pct))\(bolt)" }
     if r.percent <= 15 { return Tone.error(pct) }
     if r.percent <= 30 { return Tone.warn(pct) }
     return Tone.ok(pct)
