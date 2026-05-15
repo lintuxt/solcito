@@ -134,4 +134,36 @@ struct DeviceDetailsTests {
         #expect(r?.percent == nil)
         #expect(r?.isCharging == true)
     }
+
+    @Test("BatteryVoltage: 4135 mV → 100%, charging flag bit 7")
+    func voltageFullCharging() {
+        // 4135 mV (top of Li-Ion curve), bit 7 set = charging
+        let p: [UInt8] = [0x10, 0x27, 0x80] + Array(repeating: 0, count: 13) // 0x1027 = 4135
+        let r = DeviceDetails.parseBatteryVoltage(parameters: p)
+        #expect(r?.percent == 100)
+        #expect(r?.isCharging == true)
+    }
+
+    @Test("BatteryVoltage: mid voltage interpolates between anchors")
+    func voltageMidRange() {
+        // 3950 mV anchor → 90% exactly
+        let p: [UInt8] = [0x0F, 0x6E, 0x00] + Array(repeating: 0, count: 13) // 0x0F6E = 3950
+        let r = DeviceDetails.parseBatteryVoltage(parameters: p)
+        #expect(r?.percent == 90)
+        #expect(r?.isCharging == false)
+    }
+
+    @Test("BatteryVoltage: nonsense voltage rejected")
+    func voltageGarbage() {
+        // 1000 mV is below the sanity range → nil reading
+        let p: [UInt8] = [0x03, 0xE8, 0x00] + Array(repeating: 0, count: 13)
+        #expect(DeviceDetails.parseBatteryVoltage(parameters: p) == nil)
+    }
+
+    @Test("BatteryVoltage: linear interpolation between curve anchors")
+    func voltageInterpolation() {
+        // 3890 mV is between 3870 (80%) and 3950 (90%) → about 82%
+        let mid = DeviceDetails.voltageToPercent(mV: 3890)
+        #expect(mid == 82)
+    }
 }

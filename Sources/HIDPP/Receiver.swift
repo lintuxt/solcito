@@ -241,12 +241,21 @@ public final class Receiver: @unchecked Sendable {
         return DeviceDetails(slot: slot, name: name, kind: kind, wpid: wpid, battery: battery)
     }
 
-    /// Battery status via HID++ 2.0. Tries the modern `UnifiedBattery`
-    /// feature (0x1004) first, falls back to the older `BatteryStatus`
-    /// feature (0x1000). Asleep devices won't answer either; returns nil.
+    /// Battery status via HID++ 2.0. Tries three sources in order, taking
+    /// the first that yields an actual percent. If none do, returns any
+    /// reading we got at all (so the charging flag still surfaces).
+    ///   1. `UnifiedBattery` (0x1004) — modern devices
+    ///   2. `BatteryVoltage` (0x1001) — mV → percent via Li-Ion curve;
+    ///      often reports a real number when 0x1000 says "unknown"
+    ///   3. `BatteryStatus`  (0x1000) — older devices
     private func readBatteryV2(slot: UInt8) async -> BatteryReading? {
-        if let r = await readUnifiedBattery(slot: slot) { return r }
-        return await readLegacyBattery(slot: slot)
+        let unified = await readUnifiedBattery(slot: slot)
+        if unified?.percent != nil { return unified }
+        let voltage = await readBatteryVoltage(slot: slot)
+        if voltage?.percent != nil { return voltage }
+        let legacy = await readLegacyBattery(slot: slot)
+        if legacy?.percent != nil { return legacy }
+        return unified ?? voltage ?? legacy
     }
 
     private func readUnifiedBattery(slot: UInt8) async -> BatteryReading? {
@@ -267,6 +276,24 @@ public final class Receiver: @unchecked Sendable {
         return DeviceDetails.parseUnifiedBattery(parameters: resp.parameters)
     }
 
+    private func readBatteryVoltage(slot: UInt8) async -> BatteryReading? {
+        let fid = HIDPP20.FeatureID.batteryVoltage.rawValue
+        guard let root = try? await featureRequest(
+            deviceIndex: slot,
+            featureIndex: 0, function: 0,
+            parameters: [UInt8(fid >> 8), UInt8(fid & 0xFF)],
+            timeout: .milliseconds(400)
+        ), let idx = root.parameters.first, idx != 0 else { return nil }
+
+        // Function 0: GetBatteryInfo → bytes [0..1] mV, [2] flags
+        guard let resp = try? await featureRequest(
+            deviceIndex: slot,
+            featureIndex: idx, function: 0,
+            timeout: .milliseconds(400)
+        ) else { return nil }
+        return DeviceDetails.parseBatteryVoltage(parameters: resp.parameters)
+    }
+
     private func readLegacyBattery(slot: UInt8) async -> BatteryReading? {
         let fid = HIDPP20.FeatureID.batteryStatus.rawValue
         guard let root = try? await featureRequest(
@@ -276,13 +303,23 @@ public final class Receiver: @unchecked Sendable {
             timeout: .milliseconds(400)
         ), let idx = root.parameters.first, idx != 0 else { return nil }
 
-        // Function 0: GetBatteryLevelStatus → byte 0 = percent, byte 2 = status
-        guard let resp = try? await featureRequest(
-            deviceIndex: slot,
-            featureIndex: idx, function: 0,
-            timeout: .milliseconds(400)
-        ) else { return nil }
-        return DeviceDetails.parseLegacyBattery(parameters: resp.parameters)
+        func query() async -> BatteryReading? {
+            guard let resp = try? await featureRequest(
+                deviceIndex: slot,
+                featureIndex: idx, function: 0,
+                timeout: .milliseconds(400)
+            ) else { return nil }
+            return DeviceDetails.parseLegacyBattery(parameters: resp.parameters)
+        }
+
+        // First read often returns "level unknown" (byte 0 = 0) on devices
+        // that just woke up while charging. Retry once after a brief
+        // settle — the firmware usually has a real reading by then.
+        let first = await query()
+        if first?.percent != nil { return first }
+        try? await Task.sleep(for: .milliseconds(250))
+        let second = await query()
+        return second ?? first
     }
 
     /// HID++ 2.0 fallback: query feature `0x0005` (`DeviceName`) directly

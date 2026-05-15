@@ -94,6 +94,45 @@ public struct DeviceDetails: Sendable, Hashable {
         let percent: Int? = (1...100).contains(level) ? level : nil
         return BatteryReading(percent: percent, isCharging: charging)
     }
+
+    /// Parse a HID++ 2.0 feature `0x1001` BatteryVoltage response. Layout:
+    ///   parameters[0..1] = voltage in mV (big-endian)
+    ///   parameters[2]    = flags. Bit 7 = charging.
+    /// Voltage is mapped to a percent using the Li-Ion charge curve from
+    /// Solaar's `voltage.py`.
+    public static func parseBatteryVoltage(parameters: [UInt8]) -> BatteryReading? {
+        guard parameters.count >= 3 else { return nil }
+        let mV = (UInt16(parameters[0]) << 8) | UInt16(parameters[1])
+        // Sanity: any Li-Ion-flavored Logitech rechargeable sits in this range.
+        guard (2500...5000).contains(Int(mV)) else { return nil }
+        let charging = (parameters[2] & 0x80) != 0
+        return BatteryReading(percent: voltageToPercent(mV: mV), isCharging: charging)
+    }
+
+    /// Li-Ion voltage → percent curve, anchors taken from Solaar's
+    /// `voltage.py` (single-cell, common Logitech rechargeable profile).
+    /// Linearly interpolates between adjacent anchors; clamps at the
+    /// endpoints.
+    static func voltageToPercent(mV: UInt16) -> Int {
+        let curve: [(mV: UInt16, pct: Int)] = [
+            (4135, 100), (3950, 90), (3870, 80), (3810, 70),
+            (3770, 60),  (3730, 50), (3700, 40), (3680, 30),
+            (3650, 20),  (3600, 10), (3550, 5),  (3490, 1),
+        ]
+        if mV >= curve[0].mV       { return 100 }
+        if mV <= curve.last!.mV    { return 0 }
+        for i in 0..<(curve.count - 1) {
+            let hi = curve[i]
+            let lo = curve[i + 1]
+            if mV <= hi.mV && mV > lo.mV {
+                let span = Int(hi.mV) - Int(lo.mV)
+                let into = Int(mV) - Int(lo.mV)
+                let pctSpan = hi.pct - lo.pct
+                return lo.pct + (into * pctSpan) / span
+            }
+        }
+        return 0
+    }
 }
 
 /// One battery measurement read from a paired device. `percent` may be

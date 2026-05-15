@@ -15,6 +15,10 @@ public enum HIDPP20 {
         case deviceName        = 0x0005
         /// Older battery feature, percent + status. Pre-2018ish devices.
         case batteryStatus     = 0x1000
+        /// Battery in millivolts. We convert to percent via a Li-Ion
+        /// charge curve. Often reports a real number when the discrete
+        /// "level" features fall back to "unknown" while charging.
+        case batteryVoltage    = 0x1001
         /// Modern battery feature, percent + status + charge flags.
         /// Most current Logitech devices expose this.
         case unifiedBattery    = 0x1004
