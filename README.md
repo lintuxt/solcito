@@ -6,6 +6,10 @@ A macOS-native manager for Logitech wireless receivers (Unifying, Bolt, Lightspe
 
 Inspired by [Solaar](https://github.com/pwr-Solaar/Solaar), reimplemented in Swift on top of IOKit HID. No Python runtime, no hidapi, no Homebrew dependency.
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="solcito CLI output showing two Logitech Unifying receivers with paired devices, battery levels, and charging status" width="720">
+</p>
+
 ## Install
 
 Requires macOS 14+ on Apple Silicon.
