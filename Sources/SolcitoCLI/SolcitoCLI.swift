@@ -141,17 +141,28 @@ private func printReceiverStatus(_ r: DiscoveredReceiver, label: String?) async 
 }
 
 /// Human-readable battery label, colored by remaining charge. Returns nil
-/// when no reading is available (asleep device, feature not supported).
-/// The ⚡ glyph appears next to the percentage whenever the device reports
-/// charging — including a freshly-plugged-in device still reading 0%.
+/// when there's nothing to show (asleep device, feature not supported,
+/// and no charging indication either).
+///
+/// Logitech firmware reports "level not measured yet" as 0 — common right
+/// after the device wakes up while charging. In that case `percent` is
+/// nil and we render just "charging ⚡" rather than the misleading "0%".
 private func formatBattery(_ reading: BatteryReading?) -> String? {
     guard let r = reading else { return nil }
-    let pct = "\(r.percent)%"
     let bolt = " " + Tone.warn("⚡")
-    if r.isCharging    { return "\(Tone.ok(pct))\(bolt)" }
-    if r.percent <= 15 { return Tone.error(pct) }
-    if r.percent <= 30 { return Tone.warn(pct) }
-    return Tone.ok(pct)
+
+    switch (r.percent, r.isCharging) {
+    case (nil, false):
+        return nil
+    case (nil, true):
+        return Tone.subtle("charging") + bolt
+    case (let p?, true):
+        return "\(Tone.ok("\(p)%"))\(bolt)"
+    case (let p?, false):
+        if p <= 15 { return Tone.error("\(p)%") }
+        if p <= 30 { return Tone.warn("\(p)%") }
+        return Tone.ok("\(p)%")
+    }
 }
 
 // MARK: - pair

@@ -50,38 +50,61 @@ public struct DeviceDetails: Sendable, Hashable {
 
     /// Parse a HID++ 2.0 feature `0x1004` UnifiedBattery `GetStatus`
     /// response. Layout:
-    ///   parameters[0] = state of charge (percent, 0–100)
+    ///   parameters[0] = state of charge in percent (or 0 = unknown)
+    ///   parameters[1] = approximate level bucket: 8=full, 4=good,
+    ///                   2=low, 1=critical, 0=empty (Solaar mapping)
     ///   parameters[2] = status enum (0 discharging, 1+ charging variants)
+    ///
+    /// When byte 0 is 0 (firmware says "level not measured"), we fall
+    /// back to the bucket in byte 1, mapped to a representative percent.
     public static func parseUnifiedBattery(parameters: [UInt8]) -> BatteryReading? {
         guard parameters.count >= 3 else { return nil }
-        let percent = Int(parameters[0])
-        guard (0...100).contains(percent) else { return nil }
+        let direct = Int(parameters[0])
+        let bucket = parameters[1]
         let status = parameters[2]
         let charging = (status != 0)
+
+        let percent: Int?
+        if (1...100).contains(direct) {
+            percent = direct
+        } else {
+            switch bucket {
+            case 8:  percent = 100
+            case 4:  percent = 70
+            case 2:  percent = 20
+            case 1:  percent = 5
+            default: percent = nil
+            }
+        }
         return BatteryReading(percent: percent, isCharging: charging)
     }
 
     /// Parse a HID++ 2.0 feature `0x1000` BatteryStatus `GetLevelStatus`
     /// response. Layout:
-    ///   parameters[0] = discharge level (percent, 0–100)
+    ///   parameters[0] = discharge level (percent), or 0 = unknown
     ///   parameters[2] = status: 0 discharging, 1 recharging,
     ///                           2 charge complete, 3 charge failure
+    /// Per Solaar's decipher_battery_status, byte 0 == 0 means "no
+    /// reading available yet" — return nil percent in that case.
     public static func parseLegacyBattery(parameters: [UInt8]) -> BatteryReading? {
         guard parameters.count >= 3 else { return nil }
-        let percent = Int(parameters[0])
-        guard (0...100).contains(percent) else { return nil }
+        let level = Int(parameters[0])
         let status = parameters[2]
         let charging = (status == 1 || status == 2)
+        let percent: Int? = (1...100).contains(level) ? level : nil
         return BatteryReading(percent: percent, isCharging: charging)
     }
 }
 
-/// One battery measurement read from a paired device.
+/// One battery measurement read from a paired device. `percent` may be
+/// nil even when `isCharging` is known — Logitech firmware reports byte 0
+/// as 0 to mean "level not measured yet", which we surface as nil so
+/// the UI can show "charging" or "—" instead of a misleading "0%".
 public struct BatteryReading: Sendable, Hashable {
-    public let percent: Int
+    public let percent: Int?
     public let isCharging: Bool
 
-    public init(percent: Int, isCharging: Bool) {
+    public init(percent: Int?, isCharging: Bool) {
         self.percent = percent
         self.isCharging = isCharging
     }

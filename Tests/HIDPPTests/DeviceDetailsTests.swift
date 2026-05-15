@@ -76,9 +76,9 @@ struct DeviceDetailsTests {
         #expect(formatDeviceLabel(already) == "MX Ergo Multi-Device Trackball")
     }
 
-    @Test("UnifiedBattery: percent at byte 0, charging flag at byte 2")
+    @Test("UnifiedBattery: byte 0 percent, byte 2 charging flag")
     func unifiedBatteryDischarging() {
-        let p: [UInt8] = [0x4E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        let p: [UInt8] = [0x4E, 0x00, 0x00] + Array(repeating: 0, count: 13)
         let r = DeviceDetails.parseUnifiedBattery(parameters: p)
         #expect(r?.percent == 78)
         #expect(r?.isCharging == false)
@@ -86,16 +86,25 @@ struct DeviceDetailsTests {
 
     @Test("UnifiedBattery: non-zero status byte = charging")
     func unifiedBatteryCharging() {
-        let p: [UInt8] = [0x5A, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        let p: [UInt8] = [0x5A, 0x00, 0x01] + Array(repeating: 0, count: 13)
         let r = DeviceDetails.parseUnifiedBattery(parameters: p)
         #expect(r?.percent == 90)
         #expect(r?.isCharging == true)
     }
 
-    @Test("UnifiedBattery: percent above 100 rejected")
-    func unifiedBatteryGarbage() {
-        let p: [UInt8] = [0xFF, 0x00, 0x00] + Array(repeating: 0, count: 13)
-        #expect(DeviceDetails.parseUnifiedBattery(parameters: p) == nil)
+    @Test("UnifiedBattery: byte 0 = 0 falls back to byte 1 bucket")
+    func unifiedBatteryBucketFallback() {
+        // bucket=8 means FULL
+        let full: [UInt8] = [0x00, 0x08, 0x01] + Array(repeating: 0, count: 13)
+        #expect(DeviceDetails.parseUnifiedBattery(parameters: full)?.percent == 100)
+        // bucket=2 means LOW
+        let low: [UInt8] = [0x00, 0x02, 0x00] + Array(repeating: 0, count: 13)
+        #expect(DeviceDetails.parseUnifiedBattery(parameters: low)?.percent == 20)
+        // bucket=0 with byte 0 = 0 → percent unknown
+        let unknown: [UInt8] = [0x00, 0x00, 0x01] + Array(repeating: 0, count: 13)
+        let r = DeviceDetails.parseUnifiedBattery(parameters: unknown)
+        #expect(r?.percent == nil)
+        #expect(r?.isCharging == true)
     }
 
     @Test("LegacyBattery: discharging when status == 0")
@@ -114,5 +123,15 @@ struct DeviceDetailsTests {
         #expect(DeviceDetails.parseLegacyBattery(parameters: charged)?.isCharging == true)
         let failed: [UInt8] = [0x64, 0x00, 0x03] + Array(repeating: 0, count: 13)
         #expect(DeviceDetails.parseLegacyBattery(parameters: failed)?.isCharging == false)
+    }
+
+    @Test("LegacyBattery: byte 0 == 0 means 'not measured yet'")
+    func legacyBatteryUnknown() {
+        // Real capture from a freshly-plugged-in MX Anywhere 2S that the
+        // firmware was reporting before any battery sensor read had returned.
+        let p: [UInt8] = [0x00, 0x00, 0x01] + Array(repeating: 0, count: 13)
+        let r = DeviceDetails.parseLegacyBattery(parameters: p)
+        #expect(r?.percent == nil)
+        #expect(r?.isCharging == true)
     }
 }
