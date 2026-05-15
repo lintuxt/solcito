@@ -20,6 +20,8 @@ struct SolcitoCLI {
             await runUnpair(slot: slot)
         case "help", "-h", "--help":
             printHelp()
+        case "version", "--version", "-v":
+            print("solcito \(Version.current)")
         case let other?:
             stderr("Unknown command: \(other)")
             stderr("Run `solcito help` to see available commands.")
@@ -32,7 +34,7 @@ struct SolcitoCLI {
 
 private func printHelp() {
     print()
-    print("  \(Tone.title("solcito"))  \(Tone.subtle("· Logitech wireless device manager for macOS"))")
+    print("  \(Tone.title("solcito"))  \(Tone.muted("v\(Version.current)"))  \(Tone.subtle("· Logitech wireless device manager for macOS"))")
     print()
     print("  \(Tone.muted("USAGE"))")
     let rows: [(String, String)] = [
@@ -40,6 +42,7 @@ private func printHelp() {
         ("solcito pair",           "Add a new device. When prompted, turn the device off and on"),
         ("",                       "(or press its \"Connect\" button if it has one)."),
         ("solcito unpair <slot>",  "Remove the device in the given slot (1–6)."),
+        ("solcito version",        "Print the version and exit."),
         ("solcito help",           "Show this help."),
     ]
     for (cmd, desc) in rows {
@@ -84,7 +87,7 @@ private func showStatus() async {
 
 private func printBanner() {
     print()
-    print("  \(Tone.title("solcito"))  \(Tone.subtle("· Logitech wireless device manager"))")
+    print("  \(Tone.title("solcito"))  \(Tone.muted("v\(Version.current)"))  \(Tone.subtle("· Logitech wireless device manager"))")
     print()
 }
 
