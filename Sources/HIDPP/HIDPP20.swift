@@ -13,6 +13,11 @@ public enum HIDPP20 {
         case featureSet        = 0x0001
         case deviceInformation = 0x0003
         case deviceName        = 0x0005
+        /// Older battery feature, percent + status. Pre-2018ish devices.
+        case batteryStatus     = 0x1000
+        /// Modern battery feature, percent + status + charge flags.
+        /// Most current Logitech devices expose this.
+        case unifiedBattery    = 0x1004
     }
 
     /// HID++ 2.0 error codes. Returned in the response body when an error

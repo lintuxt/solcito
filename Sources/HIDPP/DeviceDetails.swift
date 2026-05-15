@@ -6,15 +6,21 @@ import Foundation
 /// decoder degrades gracefully when bytes are missing.
 public struct DeviceDetails: Sendable, Hashable {
     public let slot: Int
-    public let name: String?            // receiver-stored marketing name ("MX Ergo")
-    public let kind: PairedDeviceKind?  // mouse / keyboard / trackball / …
-    public let wpid: UInt16?            // Logitech wireless product ID
+    public let name: String?              // receiver-stored marketing name ("MX Ergo")
+    public let kind: PairedDeviceKind?    // mouse / keyboard / trackball / …
+    public let wpid: UInt16?              // Logitech wireless product ID
+    public let battery: BatteryReading?   // last-seen battery status, if device was awake
 
-    public init(slot: Int, name: String? = nil, kind: PairedDeviceKind? = nil, wpid: UInt16? = nil) {
+    public init(slot: Int,
+                name: String? = nil,
+                kind: PairedDeviceKind? = nil,
+                wpid: UInt16? = nil,
+                battery: BatteryReading? = nil) {
         self.slot = slot
         self.name = name
         self.kind = kind
         self.wpid = wpid
+        self.battery = battery
     }
 
     // MARK: - Wire-format parsers
@@ -40,6 +46,44 @@ public struct DeviceDetails: Sendable, Hashable {
         let kindNibble = Int(parameters[7] & 0x0F)
         let kind = PairedDeviceKind(rawValue: kindNibble)
         return (kind, wpid == 0 ? nil : wpid)
+    }
+
+    /// Parse a HID++ 2.0 feature `0x1004` UnifiedBattery `GetStatus`
+    /// response. Layout:
+    ///   parameters[0] = state of charge (percent, 0–100)
+    ///   parameters[2] = status enum (0 discharging, 1+ charging variants)
+    public static func parseUnifiedBattery(parameters: [UInt8]) -> BatteryReading? {
+        guard parameters.count >= 3 else { return nil }
+        let percent = Int(parameters[0])
+        guard (0...100).contains(percent) else { return nil }
+        let status = parameters[2]
+        let charging = (status != 0)
+        return BatteryReading(percent: percent, isCharging: charging)
+    }
+
+    /// Parse a HID++ 2.0 feature `0x1000` BatteryStatus `GetLevelStatus`
+    /// response. Layout:
+    ///   parameters[0] = discharge level (percent, 0–100)
+    ///   parameters[2] = status: 0 discharging, 1 recharging,
+    ///                           2 charge complete, 3 charge failure
+    public static func parseLegacyBattery(parameters: [UInt8]) -> BatteryReading? {
+        guard parameters.count >= 3 else { return nil }
+        let percent = Int(parameters[0])
+        guard (0...100).contains(percent) else { return nil }
+        let status = parameters[2]
+        let charging = (status == 1 || status == 2)
+        return BatteryReading(percent: percent, isCharging: charging)
+    }
+}
+
+/// One battery measurement read from a paired device.
+public struct BatteryReading: Sendable, Hashable {
+    public let percent: Int
+    public let isCharging: Bool
+
+    public init(percent: Int, isCharging: Bool) {
+        self.percent = percent
+        self.isCharging = isCharging
     }
 }
 

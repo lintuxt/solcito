@@ -131,9 +131,26 @@ private func printReceiverStatus(_ r: DiscoveredReceiver, label: String?) async 
         let details = await receiver.deviceDetails(slot: p.slot)
         let label = formatDeviceLabel(details)
         let slotTag = Tone.muted("· slot \(p.slot)")
+        let battTag = formatBattery(details.battery).map { " \(Tone.muted("·")) \($0)" } ?? ""
         let suffix = (p.status == .silent) ? "  \(Tone.warn("(asleep)"))" : ""
-        print("      \(icon(for: details.kind)) \(Tone.device(label))  \(slotTag)\(suffix)")
+        print("      \(icon(for: details.kind)) \(Tone.device(label))  \(slotTag)\(battTag)\(suffix)")
     }
+}
+
+/// Human-readable battery label, colored by remaining charge. Returns nil
+/// when no reading is available (asleep device, feature not supported).
+/// 0% + charging is treated as "reading not yet stabilized" — common right
+/// after plug-in — and rendered as just "charging" rather than "0% ⚡︎".
+private func formatBattery(_ reading: BatteryReading?) -> String? {
+    guard let r = reading else { return nil }
+    if r.isCharging && r.percent == 0 {
+        return Tone.subtle("charging")
+    }
+    let pct = "\(r.percent)%"
+    if r.isCharging    { return "\(Tone.ok(pct))\(Tone.subtle(" ⚡︎"))" }
+    if r.percent <= 15 { return Tone.error(pct) }
+    if r.percent <= 30 { return Tone.warn(pct) }
+    return Tone.ok(pct)
 }
 
 // MARK: - pair

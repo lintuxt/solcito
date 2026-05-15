@@ -75,4 +75,44 @@ struct DeviceDetailsTests {
         let already = DeviceDetails(slot: 2, name: "MX Ergo Multi-Device Trackball", kind: .trackball, wpid: nil)
         #expect(formatDeviceLabel(already) == "MX Ergo Multi-Device Trackball")
     }
+
+    @Test("UnifiedBattery: percent at byte 0, charging flag at byte 2")
+    func unifiedBatteryDischarging() {
+        let p: [UInt8] = [0x4E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        let r = DeviceDetails.parseUnifiedBattery(parameters: p)
+        #expect(r?.percent == 78)
+        #expect(r?.isCharging == false)
+    }
+
+    @Test("UnifiedBattery: non-zero status byte = charging")
+    func unifiedBatteryCharging() {
+        let p: [UInt8] = [0x5A, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        let r = DeviceDetails.parseUnifiedBattery(parameters: p)
+        #expect(r?.percent == 90)
+        #expect(r?.isCharging == true)
+    }
+
+    @Test("UnifiedBattery: percent above 100 rejected")
+    func unifiedBatteryGarbage() {
+        let p: [UInt8] = [0xFF, 0x00, 0x00] + Array(repeating: 0, count: 13)
+        #expect(DeviceDetails.parseUnifiedBattery(parameters: p) == nil)
+    }
+
+    @Test("LegacyBattery: discharging when status == 0")
+    func legacyBatteryDischarging() {
+        let p: [UInt8] = [0x32, 0x00, 0x00] + Array(repeating: 0, count: 13)
+        let r = DeviceDetails.parseLegacyBattery(parameters: p)
+        #expect(r?.percent == 50)
+        #expect(r?.isCharging == false)
+    }
+
+    @Test("LegacyBattery: charging when status is 1 or 2")
+    func legacyBatteryCharging() {
+        let recharging: [UInt8] = [0x64, 0x00, 0x01] + Array(repeating: 0, count: 13)
+        #expect(DeviceDetails.parseLegacyBattery(parameters: recharging)?.isCharging == true)
+        let charged: [UInt8] = [0x64, 0x00, 0x02] + Array(repeating: 0, count: 13)
+        #expect(DeviceDetails.parseLegacyBattery(parameters: charged)?.isCharging == true)
+        let failed: [UInt8] = [0x64, 0x00, 0x03] + Array(repeating: 0, count: 13)
+        #expect(DeviceDetails.parseLegacyBattery(parameters: failed)?.isCharging == false)
+    }
 }

@@ -235,7 +235,54 @@ public final class Receiver: @unchecked Sendable {
             name = name ?? v2.name
             kind = kind ?? v2.kind
         }
-        return DeviceDetails(slot: slot, name: name, kind: kind, wpid: wpid)
+
+        let battery = await readBatteryV2(slot: UInt8(slot))
+
+        return DeviceDetails(slot: slot, name: name, kind: kind, wpid: wpid, battery: battery)
+    }
+
+    /// Battery status via HID++ 2.0. Tries the modern `UnifiedBattery`
+    /// feature (0x1004) first, falls back to the older `BatteryStatus`
+    /// feature (0x1000). Asleep devices won't answer either; returns nil.
+    private func readBatteryV2(slot: UInt8) async -> BatteryReading? {
+        if let r = await readUnifiedBattery(slot: slot) { return r }
+        return await readLegacyBattery(slot: slot)
+    }
+
+    private func readUnifiedBattery(slot: UInt8) async -> BatteryReading? {
+        let fid = HIDPP20.FeatureID.unifiedBattery.rawValue
+        guard let root = try? await featureRequest(
+            deviceIndex: slot,
+            featureIndex: 0, function: 0,
+            parameters: [UInt8(fid >> 8), UInt8(fid & 0xFF)],
+            timeout: .milliseconds(400)
+        ), let idx = root.parameters.first, idx != 0 else { return nil }
+
+        // Function 1: GetStatus → byte 0 = percent, byte 2 = status enum
+        guard let resp = try? await featureRequest(
+            deviceIndex: slot,
+            featureIndex: idx, function: 1,
+            timeout: .milliseconds(400)
+        ) else { return nil }
+        return DeviceDetails.parseUnifiedBattery(parameters: resp.parameters)
+    }
+
+    private func readLegacyBattery(slot: UInt8) async -> BatteryReading? {
+        let fid = HIDPP20.FeatureID.batteryStatus.rawValue
+        guard let root = try? await featureRequest(
+            deviceIndex: slot,
+            featureIndex: 0, function: 0,
+            parameters: [UInt8(fid >> 8), UInt8(fid & 0xFF)],
+            timeout: .milliseconds(400)
+        ), let idx = root.parameters.first, idx != 0 else { return nil }
+
+        // Function 0: GetBatteryLevelStatus → byte 0 = percent, byte 2 = status
+        guard let resp = try? await featureRequest(
+            deviceIndex: slot,
+            featureIndex: idx, function: 0,
+            timeout: .milliseconds(400)
+        ) else { return nil }
+        return DeviceDetails.parseLegacyBattery(parameters: resp.parameters)
     }
 
     /// HID++ 2.0 fallback: query feature `0x0005` (`DeviceName`) directly
